@@ -55,6 +55,7 @@ class ProcessInfo:
     pid: int
     name: str = ""       # 可执行文件名，如 CodeBuddy CN.exe
     path: str = ""       # 完整路径，拿不到时为空
+    started: float = 0.0  # 进程创建时间（unix 秒），面板排序用；拿不到时为 0
 
 
 class UiProbeSession:
@@ -96,7 +97,7 @@ class Backend(ABC):
     def processes(self) -> list[ProcessInfo]:
         """枚举本机所有进程。"""
         out: list[ProcessInfo] = []
-        for proc in psutil.process_iter(["pid", "name", "exe"]):
+        for proc in psutil.process_iter(["pid", "name", "exe", "create_time"]):
             info = proc.info
             if info.get("pid") is None:
                 continue
@@ -104,6 +105,7 @@ class Backend(ABC):
                 pid=int(info["pid"]),
                 name=info.get("name") or "",
                 path=info.get("exe") or "",
+                started=float(info.get("create_time") or 0.0),
             ))
         return out
 
@@ -202,6 +204,20 @@ class Backend(ABC):
         「自己算鼠标位移」的方案。
         """
         return False
+
+    # ---------------- 拖动跟随的快速通道（默认没有，Windows 后端覆盖） ----------------
+
+    def window_pos(self, native) -> tuple[int, int] | None:
+        """窗口左上角（物理像素）。返回 None 表示平台不支持快速通道。"""
+        return None
+
+    def place_window(self, native, x: int, y: int) -> bool:
+        """把窗口挪到物理像素 (x, y)。不支持时返回 False。"""
+        return False
+
+    def work_area(self) -> tuple[int, int, int, int] | None:
+        """主屏工作区（物理像素）。不支持时返回 None。"""
+        return None
 
     def alert_sound(self, level: int = 2) -> None:
         """需要你出手时响一下。

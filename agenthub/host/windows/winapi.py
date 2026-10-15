@@ -23,6 +23,34 @@ TH32CS_SNAPPROCESS = 0x02
 MAX_PATH = 260
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
+# SetWindowPos 的 flag（拖动跟随用：只挪位置，不动尺寸不抢 Z 序不抢焦点）
+SWP_NOSIZE = 0x0001
+SWP_NOZORDER = 0x0004
+SWP_NOACTIVATE = 0x0010
+SPI_GETWORKAREA = 0x0030
+
+
+class RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", wintypes.LONG),
+        ("top", wintypes.LONG),
+        ("right", wintypes.LONG),
+        ("bottom", wintypes.LONG),
+    ]
+
+
+user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
+user32.GetWindowRect.restype = wintypes.BOOL
+user32.SetWindowPos.argtypes = [
+    wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+    ctypes.c_int, ctypes.c_int, wintypes.UINT,
+]
+user32.SetWindowPos.restype = wintypes.BOOL
+user32.SystemParametersInfoW.argtypes = [
+    wintypes.UINT, wintypes.UINT, ctypes.c_void_p, wintypes.UINT,
+]
+user32.SystemParametersInfoW.restype = wintypes.BOOL
+
 
 class FILETIME(ctypes.Structure):
     """FILETIME 结构体，附带一个把高低位拼成 100 纳秒计数的便捷属性。"""
@@ -226,6 +254,38 @@ def describe_window(hwnd: int) -> str:
     cls = ctypes.create_unicode_buffer(256)
     user32.GetClassNameW(hwnd, cls, 256)
     return "hwnd=%s class=%r title=%r" % (hwnd, cls.value, title.value)
+
+
+def window_pos_phys(hwnd: int) -> tuple[int, int] | None:
+    """窗口左上角，物理像素。失败返回 None。
+
+    拖动跟随专用：GetWindowRect 直读，不走 pywebview 的属性（那个跨线程
+    要经 WinForms 消息队列，一次几十毫秒，跟着拖会卡）。
+    """
+    if not hwnd:
+        return None
+    rect = RECT()
+    if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        return None
+    return int(rect.left), int(rect.top)
+
+
+def move_window_phys(hwnd: int, x: int, y: int) -> bool:
+    """把窗口挪到物理像素 (x, y)，不动尺寸、不抢 Z 序、不抢焦点。"""
+    if not hwnd:
+        return False
+    return bool(user32.SetWindowPos(
+        hwnd, None, int(x), int(y), 0, 0,
+        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+    ))
+
+
+def work_area_phys() -> tuple[int, int, int, int] | None:
+    """主屏工作区（去掉任务栏），物理像素 (left, top, right, bottom)。"""
+    rect = RECT()
+    if not user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
+        return None
+    return int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
 
 
 def activate_window(hwnd: int) -> bool:

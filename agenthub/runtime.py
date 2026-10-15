@@ -198,6 +198,7 @@ class Runtime:
         )
         self.states: dict[str, AgentState] = {}
         self._exe_paths: dict[str, str] = {}
+        self._started: dict[str, float] = {}   # agent key -> 进程启动时刻（排序用）
         self._primed = False
         self._first_scan = True
         self._on_alert = None        # fn(level: int, names: list[str])
@@ -217,13 +218,16 @@ class Runtime:
     # ---------------- 扫描
 
     def _group_processes(self, processes):
-        """按 exe 名把进程分到各个工具名下，顺带记下 exe 全路径。
+        """按 exe 名把进程分到各个工具名下，顺带记下 exe 全路径和启动时刻。
 
         Electron 应用是多进程的（主进程 + 若干 renderer + gpu），它们的 exe
         名相同，所以会一起收进来——CPU 活跃度判定正好需要看全部。
+        启动时刻取同名进程里**最早**的那个（主进程总是先起，helper 在后），
+        面板排序用：运行中的按它从早到晚排。
         """
         groups: dict[str, list[int]] = {agent.key: [] for agent in AGENTS}
         paths: dict[str, str] = {}
+        started: dict[str, float] = {}
 
         for proc in processes:
             name = (proc.name or "").lower()
@@ -235,7 +239,11 @@ class Runtime:
                 groups[agent.key].append(proc.pid)
                 if proc.path:
                     paths.setdefault(agent.key, proc.path)
-        return groups, paths
+                if proc.started > 0:
+                    prev = started.get(agent.key)
+                    if prev is None or proc.started < prev:
+                        started[agent.key] = proc.started
+        return groups, paths, started
 
     def _score_window(self, win) -> int:
         """给候选窗口打分，挑出最像「主窗口」的那个。"""
@@ -255,8 +263,11 @@ class Runtime:
     def refresh(self) -> dict:
         """扫一轮，返回给界面用的快照。"""
         processes = self.backend.processes()
-        groups, paths = self._group_processes(processes)
+        groups, paths, started = self._group_processes(processes)
         self._exe_paths.update(paths)
+        # started 里只有这轮还在跑的工具；直接整体替换，退出的自然剔除，
+        # 排序落回 AGENTS 定义顺序
+        self._started = dict(started)
         cpu = self.cpu.measure(groups)
 
         # 连隐藏窗口一起拿，否则应用缩到托盘后就切不过去了
@@ -353,8 +364,16 @@ class Runtime:
     # ---------------- 给界面
 
     def snapshot(self) -> dict:
-        agents = [self.states[agent.key].as_dict()
-                  for agent in AGENTS if agent.key in self.states]
+        # 排序：跑着的在上（按进程实际启动时刻从早到晚，先启动的先显示），
+        # 没跑的沉底，维持 AGENTS 里的定义顺序。
+        def _order(item: tuple[str, AgentState]) -> tuple:
+            key, state = item
+            if state.running:
+                return (0, self._started.get(key, float("inf")))
+            return (1, 0.0)
+
+        ordered = sorted(self.states.items(), key=_order)
+        agents = [state.as_dict() for _, state in ordered]
         running = sum(1 for state in self.states.values() if state.running)
         waiting = sum(1 for state in self.states.values() if state.waiting)
         unread = sum(1 for state in self.states.values() if state.level == 1)

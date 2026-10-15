@@ -157,6 +157,26 @@ class WindowsBackend(Backend):
             return False
         return winapi.start_window_drag(hwnd)
 
+    # ---------------- 拖动跟随的快速通道（物理像素，直连 Win32） ----------------
+
+    def window_pos(self, native) -> tuple[int, int] | None:
+        """窗口左上角，物理像素。绕开 pywebview 的属性读取（那个慢）。"""
+        hwnd = _native_handle(native)
+        if not hwnd:
+            return None
+        return winapi.window_pos_phys(hwnd)
+
+    def place_window(self, native, x: int, y: int) -> bool:
+        """把窗口挪到物理像素 (x, y)。"""
+        hwnd = _native_handle(native)
+        if not hwnd:
+            return False
+        return winapi.move_window_phys(hwnd, x, y)
+
+    def work_area(self) -> tuple[int, int, int, int] | None:
+        """主屏工作区，物理像素。"""
+        return winapi.work_area_phys()
+
     def alert_sound(self, level: int = 2) -> None:
         """审批响三声短促的升调；只是「跑完了」就一声轻响。
 

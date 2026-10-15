@@ -90,6 +90,53 @@ AGENTS: tuple[AgentDef, ...] = (
         fill_dark="#26380F",
         stroke_dark="#A8D65A",
     ),
+    # Claude Desktop（微软商店 MSIX 版）。运行时进程名是包内的 Claude.exe，
+    # 开始菜单别名是 claude-desktop.exe，两个都收。通知来源标识是
+    # Anthropic 前缀，所以 aumid_hints 加了 anthropic。
+    # 它是聊天应用、没有审批条，状态只靠通知 + CPU，不开界面探针。
+    AgentDef(
+        key="claude",
+        name="Claude",
+        match=("claude.exe", "claude-desktop.exe", "claude"),
+        fill="#FAEDE6",
+        stroke="#C15F3C",
+        aumid_hints=("claude", "anthropic"),
+        glyph="A",
+        fill_dark="#3B241A",
+        stroke_dark="#E89070",
+    ),
+    # DeepSeek Harness（Electron 应用，本机装在 D:\dsh\）。
+    # 有 agent 执行审批流，Electron 渲染面 UIA 读得到，开界面探针——
+    # 探针判据是固定审批文案 + 拒绝/执行按钮组合，读不到不会误报。
+    AgentDef(
+        key="deepseek",
+        name="DeepSeek Harness",
+        match=("deepseek harness.exe", "deepseek harness"),
+        fill="#E9EDFE",
+        stroke="#4D6BFE",
+        aumid_hints=("deepseek", "aidsh", "dsh"),
+        glyph="D",
+        fill_dark="#182452",
+        stroke_dark="#8598FF",
+        ui_probe=True,
+    ),
+    # Codex（OpenAI 的 CLI agent，本机在 %LOCALAPPDATA%\OpenAI\Codex\bin\）。
+    # 注意它**没有自己的 GUI 窗口**——跑在 Windows Terminal / ConHost 里，
+    # 窗口句柄按 PID 找不到（顶层窗口属于 WindowsTerminal.exe），
+    # 所以点卡片切不动它。能提供的是「在不在跑」和 CPU 忙闲：
+    # codex.exe 干活时会持续吃 CPU，走 Trae 同款的 busy 判定。
+    # 通知通道指望不上（CLI 不发 toast），aumid_hints 留着以防以后有桌面壳。
+    AgentDef(
+        key="codex",
+        name="Codex",
+        match=("codex.exe", "codex-command-runner.exe"),
+        fill="#E4F4EF",
+        stroke="#10A37F",
+        aumid_hints=("codex", "openai"),
+        glyph="X",
+        fill_dark="#103529",
+        stroke_dark="#4FD1A5",
+    ),
 )
 
 AGENTS_BY_KEY = {agent.key: agent for agent in AGENTS}

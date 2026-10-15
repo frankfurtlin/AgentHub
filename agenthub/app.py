@@ -26,13 +26,23 @@ import webview
 
 from . import webview_env
 from .config import Config
+from .models import AGENTS
 from .runtime import Runtime
 
 # ---------------------------------------------------------------- 尺寸与间距
 
+def _panel_height() -> int:
+    """面板高度跟着纳管的工具数量走。
+
+    492 是四张卡时的设计高度；每多一张卡加 72（卡高 64 + 卡间距 8，
+    与 web/style.css 的 .card / .cards gap 对应）。面板里的卡片列表
+    本身可滚动，这里算多了会有几像素空隙、算少了滚动条兜底，都不致命。
+    """
+    return 492 + max(0, len(AGENTS) - 4) * 72
+
 BALL = 76          # 悬浮球直径
 PANEL_W = 344      # 面板宽
-PANEL_H = 492      # 面板高
+PANEL_H = _panel_height()      # 面板高
 MARGIN = 24        # 球离屏幕边缘的默认距离
 GAP = 12           # 面板与球之间的间隙
 PANEL_RADIUS = 18  # 面板圆角半径（页面 CSS 里是同一个值，透明兜底裁剪要用）
@@ -233,6 +243,9 @@ class AgentHubApp:
         self.build()
         self.runtime.on_alert(self._on_alert)
         self.runtime.start()
+        # 面板跟随球的线程（见 _follow_ball 的注释）
+        threading.Thread(target=self._follow_ball, daemon=True,
+                         name="agenthub-follow").start()
         webview.start(self._loop, debug=debug, **options)
 
     def quit(self) -> None:
@@ -412,7 +425,10 @@ class AgentHubApp:
             self.panel.resize(PANEL_W, PANEL_H)
         except Exception as exc:
             _log("校正面板尺寸失败：%r" % exc)
+        self._move_panel()
 
+    def _move_panel(self) -> None:
+        """只改面板位置，不动尺寸。拖动跟随线程高频调用，省掉无谓的 resize。"""
         size = self._logical_screen()
         if size is None or self.ball is None:
             return
@@ -428,6 +444,69 @@ class AgentHubApp:
             self.panel.move(px, py)
         except Exception:
             pass
+
+    def _follow_ball(self) -> None:
+        """面板展开时让它实时跟着球走。
+
+        为什么轮询：原生拖动是系统接管的（`begin_window_drag`），拖动期间
+        鼠标事件全被窗口挪走，前端一个 mousemove 都收不到，事件驱动没得做。
+
+        为什么不走 pywebview 的 move()/x/y：跨线程调用要经 WinForms 消息队列
+        排队，一次几十毫秒，跟着拖一顿一顿。Windows 后端有直连 Win32 的快速
+        通道（`window_pos`/`place_window`，物理像素，见 winapi 注释），按
+        显示刷新的节奏轮询；拿不到快速通道的平台退回 150ms 的慢速轮询。
+
+        工作区和 DPI 系数在循环外取一次：拖动过程中它们不会变，每轮重查
+        纯属浪费（DPI 变更极罕见，重启一下程序就同步了）。
+        """
+        backend = self.runtime.backend
+        scale = max(1.0, float(backend.screen_scale() or 1.0))
+        ball_p = int(BALL * scale)
+        panel_w_p = int(PANEL_W * scale)
+        panel_h_p = int(PANEL_H * scale)
+        gap_p = int(GAP * scale)
+        margin_p = int(8 * scale)
+        work = backend.work_area()      # (l, t, r, b) 物理像素；拿不到就不做边界收缩
+
+        last_ball = None
+        while not self._stop.is_set():
+            if not self._panel_shown or self.ball is None or self.panel is None:
+                last_ball = None
+                self._stop.wait(0.15)
+                continue
+
+            # ---- 快速通道：Win32 直读直写 ----
+            native_ball = getattr(self.ball, "native", None)
+            ball_pos = backend.window_pos(native_ball) if native_ball is not None else None
+            if ball_pos is not None:
+                if ball_pos == last_ball:
+                    self._stop.wait(0.016)   # 球没动，白转一圈的成本只是一次 GetWindowRect
+                    continue
+                bx, by = ball_pos
+                px = bx - panel_w_p - gap_p
+                if px < margin_p:            # 左边放不下就换到球右边
+                    px = bx + ball_p + gap_p
+                py = by + ball_p - panel_h_p
+                if work is not None:
+                    px = max(margin_p, min(px, work[2] - panel_w_p - margin_p))
+                    py = max(margin_p, min(py, work[3] - panel_h_p - margin_p))
+                if backend.place_window(getattr(self.panel, "native", None), px, py):
+                    last_ball = ball_pos
+                    self._stop.wait(0.016)
+                    continue
+                # place 失败说明快速通道不可用，落到下面的慢速路径
+
+            # ---- 慢速退路（非 Windows / 句柄拿不到）：pywebview 逻辑坐标 ----
+            try:
+                pos = (int(self.ball.x), int(self.ball.y))
+            except Exception:
+                pos = None
+            if pos is None:
+                last_ball = None
+            elif pos != last_ball:
+                self._move_panel()
+                last_ball = pos
+            self._stop.wait(0.15)
 
     # ---------------- 拖动
 

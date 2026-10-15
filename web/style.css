@@ -10,6 +10,7 @@
 html, body {
   margin: 0;
   padding: 0;
+  height: 100%;                 /* 让 body 的 height:100% 有参照（面板视图跟着窗口走） */
   background: transparent;      /* 窗口本身是透明的，背景交给 .ball / .panel */
   font-family: var(--font);
   color: var(--text);
@@ -144,7 +145,9 @@ body[data-view="ball"].is-dragging { cursor: grabbing; }
 
 body[data-view="panel"] {
   width: 344px;
-  height: 492px;
+  /* 高度不写死：窗口实际高度由 Python 侧按纳管工具数算（app.py 的 _panel_height），
+     这里跟着窗口走，避免加卡后底部漏出一截透明区域。 */
+  height: 100%;
 }
 
 .panel {
