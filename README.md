@@ -44,6 +44,24 @@ AgentHub 常驻桌面角落，谁在等你就亮谁，点一下直接切到那�
 WebView2 Runtime 的好处是**不用跟着安装包发**：它是系统的，界面渲染交给它，
 所以这个项目本身很小（几个 Python 文件 + 一份 HTML/CSS，没有 Electron 那样的上百兆运行时）。
 
+## 当前进度
+
+| | |
+|---|---|
+| 悬浮球 + 状态面板 | ✅ 可用（自绘水豚、亮/暗双主题、拖动、贴边记忆） |
+| 状态判断 | ✅ 两条通道：系统通知 + 界面探针（UIA） |
+| 点卡片切窗口 | ✅ 支持从最小化 / 托盘唤起 |
+| 提示音 + 告警边沿 | ✅ 只在「从不在等 → 在等」时响一次 |
+| 开机自启 | ✅ `python tools/install_startup.py on` |
+| 底层自检 / 诊断 | ✅ `tools/selftest.py`、`tools/probe_uia.py` |
+| Windows 后端 | ✅ 完整 |
+| macOS 后端 | 🚧 接口已切好，`host/macos/` 待实现 |
+| 打包分发 | ⬜ 未开始（PyInstaller 方案已想好，见 roadmap） |
+
+近期做过的事和下一步想做的，分别记在
+[`docs/development.md`](docs/development.md)（开发过程与决策）和
+[`docs/roadmap.md`](docs/roadmap.md)（优化点与拓展想法）里。
+
 ## 上手
 
 ```bash
@@ -129,6 +147,10 @@ web/
   app.js          渲染 + 交互 + 与 Python 通信
   tokens.css      设计 token（颜色、间距、圆角、阴影）
   style.css       组件样式
+tools/
+  selftest.py         底层能力自检（不看界面，先分层定位问题）
+  probe_uia.py        界面探针诊断：当场看各家工具界面里读到了什么
+  install_startup.py  开机自启开关（写 HKCU 的 Run 键）
 ```
 
 界面是**原生 HTML/CSS/JS**，没有构建步骤、没有 `node_modules`。
@@ -161,6 +183,14 @@ web/
 ## 一些踩过的坑
 
 装 Python 就能跑的代价是，平台细节得自己趟。几个不记下来一定会重踩的：
+
+- **透明窗口要自己补一刀**：pywebview 建透明窗口时只把 WebView2 的背景设成透明，
+  **窗体自己的底色没动**，还是 WinForms 默认的 `#F0F0F0`（不透明浅灰）——于是悬浮球外面
+  一直套着一个浅灰方框。修法是把窗体刷黑 + `DwmExtendFrameIntoClientArea`（DWM 玻璃），
+  见 `webview_env.patch_transparency()`。
+  ⚠️ 别用 `TransparencyKey`：它也能让四角透明，但会把窗口变成 layered，而 layered 窗口的
+  色键区**放行鼠标消息**——实测页面里一次 `mousedown` 都收不到，球直接点不动。
+  同理，DWM 玻璃区里的纯黑像素会被键掉，所以界面不许用 `#000000`。
 
 - **WebView2 的 GPU 沙箱**：部分机器上 GPU 子进程起不来，Chromium 连试 9 次后整体放弃，
   窗口一片白、JS 一行不执行，而 Python 侧只会报一句「Main window failed to start」。
@@ -204,6 +234,14 @@ web/
 
 界面那层不用改——`web/` 是纯浏览器代码，pywebview 在 macOS 上走 WKWebView。
 `theme: auto` 也跟着系统走。
+
+## 文档
+
+| | |
+|---|---|
+| [`docs/development.md`](docs/development.md) | 开发过程：三代界面方案的取舍、架构决策、踩坑清单 |
+| [`docs/roadmap.md`](docs/roadmap.md) | 下一步：已知问题、优化点、功能拓展想法 |
+| [`docs/webview2-notes.md`](docs/webview2-notes.md) | WebView2 / pywebview 的专项排查笔记 |
 
 ## 许可
 
