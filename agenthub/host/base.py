@@ -184,6 +184,16 @@ class Backend(ABC):
         """本机存放配置/缓存的目录（不存在时由调用方创建）。"""
         return "."
 
+    def screen_scale(self) -> float:
+        """主屏的 DPI 缩放系数（1.0 = 100%，1.25 = 125%）。
+
+        `webview.screens` 报出来的尺寸，语义会随「进程是否感知 DPI」而变
+        （见 `webview_env.enable_dpi_awareness()`）——要么是虚拟化后的逻辑值、
+        要么是物理像素。要折回 pywebview 的 `move()` 认的逻辑坐标，就得拿这个
+        系数去除。不支持的平台返回 1.0，等价于 100% 缩放、不做折算。
+        """
+        return 1.0
+
     def begin_window_drag(self, native) -> bool:
         """让系统接管一个窗口的拖动。
 

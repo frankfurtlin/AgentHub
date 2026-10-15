@@ -160,6 +160,13 @@ web/
   并且失败必须能重试（`web/app.js` 的 `boot()` 就是这么写的）。
 - **UIA 得从渲染面取元素**：Electron 只有一个 `Chrome_RenderWidgetHostHWND`，
   从顶层窗口拿到的只有 3 个标题栏按钮。
+- **DPI 感知得自己设**：pywebview 不设，但它的 `get_screens()` 注释里写着
+  「already DPI-aware scaled due to SetProcessDPIAware」——那是**它的假设**，
+  不是它做过的事。不设的话，进程在窗口刚建好那会儿还不感知，
+  `webview.screens` 报的是被 Windows 虚拟化过的尺寸（2560×1440 的屏报
+  2048×1152）；等 WinForms 稍后把感知补上，坐标语义又变了，这时 `move()` 会
+  再乘一次缩放，不折算球会直接飞出屏幕。见 `agenthub/webview_env.py` 的
+  `enable_dpi_awareness()` 和 `app.py` 的 `_logical_screen()`。
 
 ## macOS
 

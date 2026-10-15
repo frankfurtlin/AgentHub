@@ -152,6 +152,35 @@ class AgentHubApp:
             return None
         return screens[0] if screens else None
 
+    def _logical_screen(self) -> tuple[int, int] | None:
+        """主屏尺寸，折算成 `Window.move()` 认的**逻辑坐标**。
+
+        绕这一道是因为 pywebview 在两种情况下给的数据语义不同，而这两种情况
+        我们都可能撞上：
+
+            进程**不**感知 DPI：`Screen.width` 是 Windows 虚拟化后的逻辑值
+                （2560×1440 的屏报 2048×1152），而 `move()` 内部不缩放，
+                直接把参数丢给 `SetWindowPos`；系统随后再把它放大回物理像素。
+                「传逻辑、落点正确」这个闭环是成立的。
+            进程感知 DPI（`webview_env` 现在会主动设）：`Screen.width` 变成
+                物理像素 2560，而 `move()` 这时**会**乘一次缩放（×1.25）。
+                不折算的话 2460 会被送到 3075，球直接飞出屏幕右边。
+
+        系数取 `backend.screen_scale()`（Windows 上就是 `GetDpiForSystem()/96`），
+        它在两种情况下都和环境自洽——不感知时返回 96，也就是 1.0，除下去等于
+        没除。一条公式同时管两种情况。
+        """
+        screen = self._screen()
+        if screen is None:
+            return None
+        try:
+            scale = float(self.runtime.backend.screen_scale())
+        except Exception:
+            scale = 1.0
+        if scale <= 0:
+            scale = 1.0
+        return int(screen.width / scale), int(screen.height / scale)
+
     def _ball_pos(self, screen) -> tuple[int, int]:
         """球的初始位置。
 
@@ -284,12 +313,13 @@ class AgentHubApp:
         """
         if self.config.get("ballPos") or self.ball is None:
             return
-        screen = self._screen()
-        if screen is None:
+        size = self._logical_screen()
+        if size is None:
             return
+        logical_w, logical_h = size
         try:
-            self.ball.move(int(screen.width - BALL - MARGIN),
-                           int(screen.height - BALL - MARGIN - 56))
+            self.ball.move(int(logical_w - BALL - MARGIN),
+                           int(logical_h - BALL - MARGIN - 56))
         except Exception as exc:
             _log("初始定位失败：%r" % exc)
 
@@ -352,24 +382,25 @@ class AgentHubApp:
 
     def _place_panel(self) -> None:
         """把面板摆在球的旁边，靠近哪边贴哪边。"""
-        # 尺寸在这里校正——见 _fix_sizes() 的说明：resize 会把窗口显示出来，
-        # 而这一步本来就紧接着 show()，顺手做掉最省事。放在最前面，免得后面
-        # 因为拿不到屏幕尺寸提前 return 就漏掉了。
+        # 尺寸在这里校正——见 _settle_windows() 的说明：resize 会把窗口显示
+        # 出来，而这一步本来就紧接着 show()，顺手做掉最省事。放在最前面，
+        # 免得后面因为拿不到屏幕尺寸提前 return 就漏掉了。
         try:
             self.panel.resize(PANEL_W, PANEL_H)
         except Exception as exc:
             _log("校正面板尺寸失败：%r" % exc)
 
-        screen = self._screen()
-        if screen is None or self.ball is None:
+        size = self._logical_screen()
+        if size is None or self.ball is None:
             return
+        logical_w, logical_h = size
 
         bx, by = int(self.ball.x), int(self.ball.y)
         px = bx - PANEL_W - GAP
         if px < 8:
             px = bx + BALL + GAP
         py = by + BALL - PANEL_H
-        py = max(8, min(py, int(screen.height) - PANEL_H - 8))
+        py = max(8, min(py, logical_h - PANEL_H - 8))
         try:
             self.panel.move(px, py)
         except Exception:

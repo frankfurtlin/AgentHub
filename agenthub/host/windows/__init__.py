@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import os
 import subprocess
 import time
@@ -134,6 +135,20 @@ class WindowsBackend(Backend):
     def config_dir(self) -> str:
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
         return os.path.join(base, "AgentHub")
+
+    def screen_scale(self) -> float:
+        """主屏 DPI 缩放系数。
+
+        特意用 `GetDpiForSystem` 而不是 `GetDpiForWindow`：这里要的是一个和
+        「本进程的 DPI 感知状态」自洽的系数，而系统 DPI 恰好满足——进程不感知
+        时它返回 96（系数 1.0，正好配虚拟化后的逻辑坐标），感知之后返回 120。
+        """
+        try:
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            dpi = int(user32.GetDpiForSystem())
+        except (OSError, AttributeError):
+            return 1.0
+        return (dpi or 96) / 96.0
 
     def begin_window_drag(self, native) -> bool:
         """把 pywebview 的 WinForms 窗口句柄交给系统去拖。"""
