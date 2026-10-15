@@ -26,6 +26,28 @@
     TemporaryDirectory 对象一转身就被 GC，目录当场被删，WebView2 拿到的是个
     不存在的路径。我们自己指一个真实目录，顺带把 private_mode 关掉，
     省得退出时它去 `shutil.rmtree` 一个已经没了的东西。
+
+三、窗口透明（这个得在窗口**建好之后**补，见 `patch_transparency`）
+    pywebview 6.2.1 建透明窗口时只做了两件事：
+    `SetStyle(SupportsTransparentBackColor, True)` 和
+    `browser.DefaultBackgroundColor = Color.Transparent`（后一步是对的）。
+    但**窗体自己的 `BackColor` 从来没被碰过**，保持 WinForms 默认的
+    `SystemColors.Control`，即 `#F0F0F0`、alpha=255。WebView2 背景透明之后，
+    透出来的就是窗体这块不透明的浅灰——桌面上看就是一个方框把球包住。
+
+    修法首选 **DWM 玻璃**：窗体底色刷黑，再把玻璃框扩展到整个客户区，
+    DWM 会把这层黑当玻璃键掉。窗口仍是矩形，命中测试照旧走原路径，
+    点击不受影响。
+
+    ⚠️ 为什么不用 `TransparencyKey`（一开始走过这条路，已否决）：
+    它确实能让四角透明，但会顺带把窗口变成 layered——MSDN 明确说
+    layered 窗口的色键区**放行鼠标消息**，页面里 `mousedown` 一次都收不到，
+    悬浮球直接点不动。实测对照见 `_shots/plans_probe.py`：
+    色键「透 4/4 / 点击没收到」，DWM 玻璃「透 4/4 / 点击收到」。
+
+    DWM 不可用（返回非 0，例如远程桌面会话、关掉了桌面合成的 Win7 基础主题）
+    时退到 `SetWindowRgn` 把窗口裁成圆角矩形——硬边无抗锯齿，但不吃点击、
+    也不依赖系统特效开关，比留着一块黑方块强。
 """
 
 from __future__ import annotations
@@ -33,6 +55,7 @@ from __future__ import annotations
 import ctypes
 import os
 import sys
+from ctypes import wintypes
 
 # WebView2 运行时认这个环境变量，会和 CreateCoreWebView2Environment 的
 # 参数一起加给浏览器进程。
@@ -137,3 +160,152 @@ def start_options(config=None, base_dir: str | None = None) -> dict:
     if base_dir is None:
         return {}
     return {"storage_path": profile_dir(base_dir), "private_mode": False}
+
+
+# ---------------------------------------------------------------- 窗口透明
+
+def _winforms_form(window):
+    """取 pywebview 底层那个 WinForms 窗体，拿不到返回 None。
+
+    非 Windows、或者窗口还在创建中（`BrowserView.instances` 里还没登记）时都会拿到
+    None——这两种情况对调用方是同一件事：**过一会儿再试**。
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        from webview.platforms import winforms
+    except Exception:
+        return None
+    return winforms.BrowserView.instances.get(window.uid)
+
+
+class _Margins(ctypes.Structure):
+    """`DwmExtendFrameIntoClientArea` 的边距，全 -1 表示「整个客户区都是玻璃」。"""
+    _fields_ = [("cxLeftWidth", ctypes.c_int), ("cxRightWidth", ctypes.c_int),
+                ("cyTopHeight", ctypes.c_int), ("cyBottomHeight", ctypes.c_int)]
+
+
+# HRGN 在 64 位是 64 位句柄；不声明 argtypes 的话 ctypes 按默认 c_int 转，
+# 直接报 "int too long to convert"。
+_gdi = None
+_user32 = None
+if sys.platform == "win32":
+    _gdi = ctypes.WinDLL("gdi32", use_last_error=True)
+    _gdi.CreateRoundRectRgn.argtypes = [ctypes.c_int] * 6
+    _gdi.CreateRoundRectRgn.restype = wintypes.HRGN
+    _user32 = ctypes.WinDLL("user32", use_last_error=True)
+    _user32.SetWindowRgn.argtypes = [wintypes.HWND, wintypes.HRGN, wintypes.BOOL]
+    _user32.SetWindowRgn.restype = ctypes.c_int
+    _user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    _user32.GetClientRect.restype = wintypes.BOOL
+
+_GLASS_BLACK = (0, 0, 0)
+
+
+def _hwnd_of(form) -> int:
+    try:
+        return int(form.Handle.ToInt64())
+    except Exception:
+        return 0
+
+
+def _paint_black(form) -> None:
+    """把窗体底色刷成纯黑——这是 DWM 玻璃的键色。"""
+    from webview.platforms import winforms as wf
+    form.BackColor = wf.Color.FromArgb(255, *_GLASS_BLACK)
+    form.Refresh()
+
+
+def _apply_glass(form) -> bool:
+    """主方案：DWM 玻璃。成功返回 True。
+
+    玻璃区里的**纯黑像素会变透明**（DWM 的键色写死是黑），所以界面一律不许用
+    `#000000`；`rgba(0,0,0,.x)` 那种半透明阴影不受影响，叠出来不会是纯黑。
+    """
+    hwnd = _hwnd_of(form)
+    if not hwnd:
+        return False
+    _paint_black(form)
+    try:
+        dwm = ctypes.WinDLL("dwmapi", use_last_error=True)
+        # 返回 HRESULT。非 0 表示这次没成（DWM 没在合成），交给 fallback。
+        return dwm.DwmExtendFrameIntoClientArea(
+            wintypes.HWND(hwnd), ctypes.byref(_Margins(-1, -1, -1, -1))) == 0
+    except (OSError, AttributeError):
+        return False
+
+
+def _apply_region(form, radius: int) -> bool:
+    """兜底方案：把窗口裁成圆角矩形（radius 给一半宽就是正圆）。
+
+    没有抗锯齿，边缘会硬一点；但既不改窗口的命中测试，也不依赖系统特效开关。
+    尺寸用 `GetClientRect` 拿，别用 `GetWindowRect`——后者在 DPI 感知进程里返回
+    物理像素，和这里要的窗口坐标系不是一个尺度。
+    """
+    if _gdi is None:
+        return False
+    hwnd = _hwnd_of(form)
+    if not hwnd:
+        return False
+
+    rect = wintypes.RECT()
+    if not _user32.GetClientRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
+        return False
+    width = rect.right - rect.left
+    height = rect.bottom - rect.top
+    if width <= 0 or height <= 0:
+        return False
+
+    rgn = _gdi.CreateRoundRectRgn(0, 0, width + 1, height + 1,
+                                  min(radius * 2, width), min(radius * 2, height))
+    if not rgn:
+        return False
+    return _user32.SetWindowRgn(wintypes.HWND(hwnd), rgn, True) != 0
+
+
+def patch_transparency(window, radius: int = 0) -> bool:
+    """补上 pywebview 漏掉的窗口透明。True = 已处理好，False = 还没就绪、下轮再试。
+
+    见模块开头第三条。三种做法的实测对照（`_shots/plans_probe.py`，95×95 圆球：
+
+        不补      BackColor=A255 R240 G240 B240 → 四角 #F0F0F0，与窗外差 635
+        TransparencyKey  四角透 4/4，但 **点击收不到**（layered 放行色键区）
+        DWM 玻璃        四角透 4/4，点击正常 ✓   ← 采用
+        SetWindowRgn    四角透 4/4，点击正常 ✓   ← DWM 不可用时的兜底
+
+    `radius` 只在兜底裁剪时用：悬浮球给直径的一半（裁成圆），面板给圆角半径。
+    主方案不吃这个参数，传 0 也无妨。
+
+    调用方要注意线程——`_loop` 跑在子线程，而 WinForms 控件归建窗那条线程管，
+    所以这里先用 `InvokeRequired` 判断，需要的话 Invoke 过去再改。
+    """
+    form = _winforms_form(window)
+    if form is None:
+        return False                    # 窗体还没建好
+
+    try:
+        if form.Tag is not None and str(form.Tag).startswith("transparency:"):
+            return True                 # 补过了，每补一次都要重算样式，别重复
+    except Exception:
+        pass
+
+    def job() -> bool:
+        glass = _apply_glass(form)
+        ok = glass or _apply_region(form, radius)
+        if ok:
+            try:
+                form.Tag = "transparency:%s" % ("glass" if glass else "region")
+            except Exception:
+                pass
+            form.Refresh()
+        return ok
+
+    try:
+        if form.InvokeRequired:
+            from System import Action
+            box = []
+            form.Invoke(Action(lambda: box.append(job())))
+            return bool(box and box[0])
+        return job()
+    except Exception:
+        return False                    # 窗口正在销毁之类的，交给下一轮

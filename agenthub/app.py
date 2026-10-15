@@ -35,6 +35,7 @@ PANEL_W = 344      # 面板宽
 PANEL_H = 492      # 面板高
 MARGIN = 24        # 球离屏幕边缘的默认距离
 GAP = 12           # 面板与球之间的间隙
+PANEL_RADIUS = 18  # 面板圆角半径（页面 CSS 里是同一个值，透明兜底裁剪要用）
 POS_SAVE_EVERY = 4  # 每几轮扫描记一次球的位置（拖动后要记住）
 SETTLE_SECONDS = 6.0  # 启动后盯着面板、别让它自己冒出来的时长（见 _guard_panel_hidden）
 
@@ -216,6 +217,11 @@ class AgentHubApp:
             resizable=False, shadow=False, hidden=True,
             js_api=self.bridge,
         )
+        # 两个窗口的透明都要等窗体真正建出来之后才补得上，见 _patch_transparency。
+        # 第二个元素是兜底裁剪用的半径：球裁成圆，面板按圆角裁。
+        self._transparency_todo = [
+            (self.ball, BALL // 2), (self.panel, PANEL_RADIUS)
+        ] if self.ball is not None and self.panel is not None else []
         return self
 
     # ---------------- 运行
@@ -247,6 +253,7 @@ class AgentHubApp:
                 first = False
                 self._settle_windows()
                 self._place_ball_default()
+            self._patch_transparency()
             try:
                 snapshot = self.runtime.refresh()
                 self._push(snapshot)
@@ -256,6 +263,22 @@ class AgentHubApp:
             if self._ticks % POS_SAVE_EVERY == 0:
                 self.remember_ball_pos()
             self._stop.wait(interval)
+
+    def _patch_transparency(self) -> None:
+        """给两个窗口补上 pywebview 漏掉的透明设置。
+
+        不补会怎样：桌面上的球（和面板的圆角）外面裹着一个 `#F0F0F0` 正方形。
+        原因和实测数据见 `webview_env.patch_transparency`。
+
+        放在循环里而不是 `_settle_windows()` 里一次做完，是因为窗口是并行建的：
+        循环刚跑起来时窗体未必登记好了。每轮试一次，都成了就空转返回。
+        """
+        if not self._transparency_todo:
+            return
+        self._transparency_todo = [
+            item for item in self._transparency_todo
+            if not webview_env.patch_transparency(item[0], item[1])
+        ]
 
     def _settle_windows(self) -> None:
         """窗口建好之后的第一次摆正。两件事都得等 GUI 起来（要有窗口句柄）才能做。
@@ -428,6 +451,10 @@ class AgentHubApp:
         try:
             pos = [int(self.ball.x), int(self.ball.y)]
         except Exception:
+            return False
+        # 窗口刚建好、还没摆到默认位置时 `x/y` 可能是占位值；那时记下来，
+        # 下次启动球就被钉在屏幕左上角了（验收脚本踩过一次）。
+        if pos[0] < 0 or pos[1] < 0:
             return False
         if self.config.get("ballPos") != pos:
             self.config.set("ballPos", pos, save=True)
