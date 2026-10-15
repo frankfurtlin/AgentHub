@@ -262,7 +262,21 @@ def _png_chunk(tag: bytes, data: bytes) -> bytes:
 
 
 def _encode_png(width: int, height: int, rows: bytes, color_type: int) -> bytes:
-    """编码 PNG。color_type：2 = RGB，6 = RGBA。"""
+    """编码 PNG。color_type：2 = RGB，6 = RGBA。
+
+    `rows` 是「每行前面多一个 filter 字节」的扫描线，长度必须严格等于
+    `(width × 每像素字节数 + 1) × height`。对不上就直接报错——PNG 头里的高度
+    和 IDAT 里的实际行数是两套数据，不一致时解码器**不会报错**，只会把缺的行
+    一律补成黑色。这个坑踩过一次：存 430×615 的抓图，下面 30% 全黑，
+    查了半天窗口尺寸和缓存，最后发现是扫描线少了一半的行。
+    """
+    per_pixel = 4 if color_type == 6 else 3
+    expected = (width * per_pixel + 1) * height
+    if len(rows) != expected:
+        raise ValueError(
+            "扫描线长度不对：%d×%d color_type=%d 需要 %d 字节，实际 %d"
+            % (width, height, color_type, expected, len(rows)))
+
     out = b"\x89PNG\r\n\x1a\n"
     out += _png_chunk(b"IHDR",
                       struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, 0))
@@ -271,11 +285,18 @@ def _encode_png(width: int, height: int, rows: bytes, color_type: int) -> bytes:
     return out
 
 
-def _rgba_rows(rgba: bytes, size: int) -> bytes:
-    """RGBA 像素 -> 带 filter 字节的扫描线（每行首字节 0 = 不过滤）。"""
+def _rgba_rows(rgba: bytes, width: int, height: int | None = None) -> bytes:
+    """RGBA 像素 -> 带 filter 字节的扫描线（每行首字节 0 = 不过滤）。
+
+    `height` 省略时按正方形算——图标都是方的，调用处不必都写两遍。
+    **非正方形一定要显式传 height**：只按宽度切的话会只取出前 `width` 行，
+    PNG 头里却写着真实高度，于是下面那截静默变黑（见 `_encode_png`）。
+    """
+    if height is None:
+        height = width
+    stride = width * 4
     rows = bytearray()
-    stride = size * 4
-    for y in range(size):
+    for y in range(height):
         rows.append(0)
         rows += rgba[y * stride:(y + 1) * stride]
     return bytes(rows)
