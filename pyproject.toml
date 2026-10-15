@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agenthub"
+version = "0.1.0"
+description = "悬浮球 + 状态面板：把本机几个 GUI 版 AI 编程助手的状态收进一个小窗口"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "frankslin" }]
+keywords = ["ai", "agent", "codebuddy", "trae", "qoder", "desktop", "webview"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Desktop Environment",
+]
+dependencies = [
+    "pywebview>=5.0",
+    "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+# 打包用（开发环境不需要）
+build = ["pyinstaller>=6.0"]
+
+[project.urls]
+Homepage = "https://github.com/frankfurtlin/AgentHub"
+Issues = "https://github.com/frankfurtlin/AgentHub/issues"
+
+[project.scripts]
+agenthub = "agenthub.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["agenthub*"]

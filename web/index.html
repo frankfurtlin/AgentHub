@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentHub</title>
+<!--
+  资源路径上带 ?v= 是有意的，别删。
+
+  pywebview 给本地文件用的那个内建 HTTP 服务**没有发 Cache-Control**
+  （它设了，但被 bottle.static_file 返回的响应对象顶掉了，只剩 Last-Modified
+  和 ETag）。于是 WebView2 走启发式缓存——新鲜期大约是文件年龄的 10%，
+  文件越旧缓存窗口越长。改了前端却看到旧界面，就是这么来的。
+
+  改前端的时候顺手把这个版本号加一下（和 pyproject.toml 的 version 对齐）。
+-->
+<link rel="stylesheet" href="tokens.css?v=0.1.1">
+<link rel="stylesheet" href="style.css?v=0.1.1">
+</head>
+<body>
+
+<!-- ------------------------------------------------------------------ 悬浮球 -->
+<template id="tpl-ball">
+  <div class="ball" data-level="0" data-pulse="0">
+    <div class="ball__pulse"></div>
+    <svg class="ball__art" viewBox="0 0 76 76" aria-hidden="true">
+      <defs>
+        <radialGradient id="ball-core" cx="36%" cy="29%" r="78%">
+          <stop offset="0%"   stop-color="var(--ball-hi)"/>
+          <stop offset="56%"  stop-color="var(--ball-mid)"/>
+          <stop offset="100%" stop-color="var(--ball-lo)"/>
+        </radialGradient>
+      </defs>
+      <circle class="ball__ring" cx="38" cy="38" r="35.5"/>
+      <circle class="ball__disk" cx="38" cy="38" r="31"/>
+      <ellipse class="ball__gloss" cx="28" cy="23" rx="13" ry="8.5"/>
+      <g class="ball__dots"></g>
+    </svg>
+    <div class="ball__badge" data-show="0" data-tone="warn">0</div>
+  </div>
+</template>
+
+<!-- ------------------------------------------------------------------ 状态面板 -->
+<template id="tpl-panel">
+  <div class="panel">
+    <header class="panel__head">
+      <svg class="panel__mark" viewBox="0 0 22 22" aria-hidden="true">
+        <circle cx="11" cy="11" r="9.2" fill="none" stroke="var(--ball-ring)" stroke-width="1.7"/>
+        <circle cx="11" cy="11" r="3.6" fill="var(--ball-ring)"/>
+      </svg>
+      <div class="panel__title">AgentHub</div>
+      <div class="panel__sub" id="sub"></div>
+      <button class="panel__close" id="close" title="收起（Esc 也可以）" aria-label="收起面板">
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <path d="M1.2 1.2 L8.8 8.8 M8.8 1.2 L1.2 8.8" fill="none"
+                stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </header>
+
+    <div class="cards" id="cards"></div>
+
+    <footer class="panel__foot" id="foot">
+      <span class="foot__spark"></span>
+      <span id="foot-text">正在读取状态…</span>
+    </footer>
+  </div>
+</template>
+
+<script src="app.js?v=0.1.1"></script>
+</body>
+</html>

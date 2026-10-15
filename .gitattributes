@@ -1,0 +1,14 @@
+# 这个项目要在 Windows 和 macOS 上同时开发，统一按 LF 存、按 LF 检出，
+# 免得行尾在两端之间来回翻转、把 diff 搅浑。
+* text=auto eol=lf
+
+# 二进制就别让 Git 去猜了
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary

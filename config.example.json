@@ -1,0 +1,10 @@
+{
+  "exePaths": {},
+  "ballPos": null,
+  "refreshMs": 1500,
+  "probeIntervalS": 2.5,
+  "theme": "auto",
+  "sound": true,
+  "onTop": true,
+  "webviewArgs": []
+}

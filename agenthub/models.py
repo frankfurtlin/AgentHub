@@ -1,0 +1,301 @@
+# -*- coding: utf-8 -*-
+"""与平台无关的数据模型和文案判据。
+
+这里的东西**不含任何系统调用**，Windows / macOS 共用：
+    AgentDef / AGENTS   四个被纳管的工具的定义
+    Notice              一条解析后的系统通知
+    AgentState          某个工具此刻的状态（界面直接渲染它）
+    classify()          把通知文案判成「要你审批」还是「跑完了」
+    parse_toast()       从通知正文里抽标题和正文
+"""
+
+from __future__ import annotations
+
+import html
+import re
+import time
+from dataclasses import dataclass, field
+
+
+# ---------------------------------------------------------------- 定义
+
+@dataclass(frozen=True)
+class AgentDef:
+    """一个被纳管的 AI 编程工具。
+
+    `match` 是进程可执行文件名（小写比较）。同一个应用在不同平台上进程名
+    可能不同，所以写成元组，命中任一即可——Windows 上是 `xxx cn.exe`，
+    macOS 上通常是 `xxx cn`（不带后缀）。
+    """
+
+    key: str
+    name: str
+    match: tuple[str, ...]
+    fill: str            # 品牌底衬（浅色主题）
+    stroke: str          # 品牌色
+    aumid_hints: tuple[str, ...] = ()   # 通知来源标识里用于识别它的关键字
+    glyph: str = ""                     # 拿不到真实图标时的兜底字符
+    fill_dark: str = ""                 # 深色主题下的底衬
+    stroke_dark: str = ""               # 深色主题下的品牌色
+    ui_probe: bool = False              # 是否额外用界面探针读审批状态
+
+
+AGENTS: tuple[AgentDef, ...] = (
+    AgentDef(
+        key="codebuddy",
+        name="CodeBuddy CN",
+        match=("codebuddy cn.exe", "codebuddy cn", "codebuddy"),
+        fill="#E1F5EE",
+        stroke="#0F6E56",
+        aumid_hints=("codebuddy",),
+        glyph="C",
+        fill_dark="#10352C",
+        stroke_dark="#5FD8AC",
+        # CodeBuddy 的通知通道实测指望不上（在系统里注册了处理器却一条没发过）：
+        # 它只在窗口「不聚焦」时才发系统通知，而审批弹窗恰恰只在你看着窗口时出现。
+        # 所以这里改用界面探针直接读。
+        ui_probe=True,
+    ),
+    AgentDef(
+        key="trae",
+        name="Trae CN",
+        match=("trae cn.exe", "trae cn", "trae"),
+        fill="#E6F1FB",
+        stroke="#185FA5",
+        aumid_hints=("trae",),
+        glyph="T",
+        fill_dark="#12314E",
+        stroke_dark="#6FB6F5",
+    ),
+    AgentDef(
+        key="qoder",
+        name="Qoder CN",
+        match=("qoder cn.exe", "qoder cn", "qoder"),
+        fill="#EEEDFE",
+        stroke="#534AB7",
+        aumid_hints=("qoder",),
+        glyph="Q",
+        fill_dark="#2A2A55",
+        stroke_dark="#A79CF5",
+        ui_probe=True,   # 同 CodeBuddy：通知库里至今 0 条
+    ),
+    AgentDef(
+        key="workbuddy",
+        name="WorkBuddy",
+        match=("workbuddy.exe", "workbuddy"),
+        fill="#EAF3DE",
+        stroke="#3B6D11",
+        aumid_hints=("workbuddy",),
+        glyph="W",
+        fill_dark="#26380F",
+        stroke_dark="#A8D65A",
+    ),
+)
+
+AGENTS_BY_KEY = {agent.key: agent for agent in AGENTS}
+
+
+# ---------------------------------------------------------------- 文案判据
+
+# 先判「要你出手」，再判「跑完了」。判据都来自各家自己的文案，中英都收。
+#
+#   Trae      「等待操作」/ 任务正在等待您的回复
+#   WorkBuddy 「任务等待确认，请处理」/ 任务已完成
+#   CodeBuddy 「工具权限请求」「等待您的回复」/「任务已完成」
+#             —— 取自 CodeBuddy 扩展的多语言资源 genie/l10n/bundle.l10n.zh-cn.json：
+#                tool_permission : "CodeBuddy 需要使用 {0} 的权限。请审查并批准工具使用。"
+#                wait_user_reply : "CodeBuddy 正在等待您的回复。请检查对话并提供所需信息。"
+#                task_completed  : "任务已成功完成。{0}"
+#             （界面语言是英文时走英文原文 Tool Permission Required /
+#               Waiting for Your Response / Task has been completed successfully）
+APPROVAL_HINTS = (
+    # 中文通用
+    "等待确认", "等待操作", "等待回复", "等待批准", "等待授权", "等待您的回复",
+    "请处理", "需要确认", "需要授权", "需要批准", "待审批", "请求授权",
+    "确认后继续", "需要你的确认", "等待你", "等你",
+    # CodeBuddy 专用（工具权限请求）
+    "工具权限请求", "权限请求", "审查并批准", "需要使用",
+    # 英文通用
+    "approval", "approve", "confirm", "waiting", "permission",
+    "tool permission", "needs permission", "permission to use",
+)
+DONE_HINTS = (
+    "已完成", "任务完成", "完成", "失败", "出错", "错误", "异常", "结束",
+    "done", "finished", "failed", "completed", "error",
+)
+
+KIND_APPROVAL = "approval"
+KIND_DONE = "done"
+KIND_INFO = "info"
+
+
+def classify(title: str, body: str) -> str:
+    """判断这条通知是「要你审批」还是「跑完了」。"""
+    blob = ("%s %s" % (title, body)).lower()
+    for hint in APPROVAL_HINTS:
+        if hint.lower() in blob:
+            return KIND_APPROVAL
+    for hint in DONE_HINTS:
+        if hint.lower() in blob:
+            return KIND_DONE
+    return KIND_INFO
+
+
+_TEXT_RE = re.compile(r"<text[^>]*>(.*?)</text>", re.S | re.I)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def parse_toast(payload) -> tuple[str, str]:
+    """从通知正文里抽出 (标题, 正文)。
+
+    Windows 存的是 toast XML；macOS 那边解出来也是类似的带标签文本，
+    所以这个函数两边共用。
+    """
+    if isinstance(payload, bytes):
+        raw = payload.decode("utf-8", "replace")
+    else:
+        raw = payload or ""
+    parts = []
+    for chunk in _TEXT_RE.findall(raw):
+        text = html.unescape(_TAG_RE.sub("", chunk))
+        text = re.sub(r"\s+", " ", text).strip()
+        parts.append(text)
+    title = parts[0] if parts else ""
+    body = parts[1] if len(parts) > 1 else ""
+    return title, body
+
+
+def match_agent(primary_id: str) -> str | None:
+    """把通知来源标识（如 WorkBuddy.WorkBuddy）映射到 Agent key。"""
+    low = (primary_id or "").lower()
+    if not low:
+        return None
+    for agent in AGENTS:
+        for hint in agent.aumid_hints:
+            if hint in low:
+                return agent.key
+    return None
+
+
+# ---------------------------------------------------------------- 运行时状态
+
+@dataclass
+class Notice:
+    """一条解析后的系统通知。"""
+
+    order: int
+    agent_key: str
+    kind: str            # approval / done / info
+    title: str
+    body: str
+    at: float            # unix 时间戳
+
+    @property
+    def text(self) -> str:
+        """面板里显示的一行摘要。"""
+        if self.title and self.title != self.body:
+            return self.title
+        return self.body or self.title
+
+
+@dataclass
+class AgentState:
+    """某个工具此刻的状态——界面直接渲染这个对象。"""
+
+    definition: AgentDef
+    running: bool = False
+    pid: int = 0
+    handle: int = 0                       # 窗口句柄（Win32 HWND / macOS CGWindowID）
+    visible: bool = True
+    minimized: bool = False
+    cpu: float = 0.0                      # 占单核百分比
+    busy: bool = False                    # 持续高 CPU -> 正在输出
+    unread: int = 0                       # 未查看的「完成」通知数
+    approvals: list[Notice] = field(default_factory=list)   # 未处理的审批请求
+    notice: Notice | None = None          # 最近一条可展示的通知
+    orders: list[int] = field(default_factory=list)         # 已并入本状态的通知 Order
+    ui_approval: bool = False             # 界面上正摆着审批条（界面探针读到的）
+
+    @property
+    def key(self) -> str:
+        return self.definition.key
+
+    @property
+    def name(self) -> str:
+        return self.definition.name
+
+    @property
+    def waiting(self) -> bool:
+        """是不是在等你出手——通知或界面任一说是就是。"""
+        return bool(self.approvals) or self.ui_approval
+
+    @property
+    def status(self) -> str:
+        if not self.running:
+            return "未启动"
+        if self.waiting:
+            return "待审批"
+        if self.unread:
+            return "有新结果"
+        if self.busy:
+            return "输出中"
+        return "空闲中"
+
+    @property
+    def window_hint(self) -> str:
+        """窗口状态，作为次要信息缀在主状态后面。"""
+        if not self.running:
+            return ""
+        if self.minimized:
+            return "最小化"
+        if not self.visible:
+            return "托盘"
+        return ""
+
+    @property
+    def detail(self) -> str:
+        """卡片第二行：通知摘要，没有就留空。"""
+        if self.approvals:
+            return self.approvals[-1].text
+        if self.ui_approval:
+            # 这条是从界面上读出来的，没有通知文案可用，给一句人话
+            return "界面上有命令等你确认"
+        if self.notice:
+            return self.notice.text
+        return ""
+
+    @property
+    def level(self) -> int:
+        """0 无 / 1 完成提醒 / 2 审批提醒。数字越大越紧急。"""
+        if self.waiting:
+            return 2
+        if self.unread:
+            return 1
+        return 0
+
+    def as_dict(self) -> dict:
+        """给前端的 JSON。字段名和前端约定好，改这里要同步改 app.js。"""
+        definition = self.definition
+        return {
+            "key": definition.key,
+            "name": definition.name,
+            "glyph": definition.glyph,
+            "fill": definition.fill,
+            "stroke": definition.stroke,
+            "fillDark": definition.fill_dark,
+            "strokeDark": definition.stroke_dark,
+            "running": self.running,
+            "visible": self.visible,
+            "minimized": self.minimized,
+            "cpu": round(self.cpu, 1),
+            "badge": "!",          # 占位：由前端按 level 决定
+            "status": self.status,
+            "hint": self.window_hint,
+            "detail": self.detail,
+            "level": self.level,
+            "waiting": self.waiting,
+        }
+
+
+def now() -> float:
+    return time.time()

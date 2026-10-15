@@ -1,0 +1,150 @@
+/* ============================================================================
+   设计 token
+   ----------------------------------------------------------------------------
+   全部尺寸和颜色都在这里定义，组件样式只引用变量。
+
+   主题怎么切：**由 JS 在 `<html>` 上写 `data-theme="light|dark"`**，
+   这里只认这个属性，不直接写 `prefers-color-scheme`。原因有两个：
+
+     1. 配置里给了 `theme: auto|light|dark`，得让用户能强制覆盖系统偏好；
+     2. 媒体查询和属性选择器没法合并，两边各写一份暗色变量迟早会走样。
+
+   所以 app.js 负责把「auto」解析成实际值再写上去。JS 跑得足够早
+   （app.js 就在 </body> 前，首帧之前），不会出现主题闪一下。
+
+   字体栈不用配置：Windows 命中 Segoe UI，macOS 命中 SF Pro，中文分别落到
+   微软雅黑和苹方——一套写法两端都好看。
+   ========================================================================= */
+
+:root {
+  color-scheme: light;
+
+  /* ---- 字体 ---- */
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI",
+          "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei",
+          system-ui, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 17px;
+
+  /* ---- 间距（4 的倍数） ---- */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+
+  /* ---- 圆角 ---- */
+  --r-panel: 18px;
+  --r-card: 12px;
+  --r-icon: 10px;
+  --r-pill: 999px;
+
+  /* ---- 动效 ---- */
+  --ease: cubic-bezier(.32, .72, 0, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --dur-slow: 340ms;
+
+  /* ---- 状态色：灰（未启动 / 空闲）---- */
+  --idle-fg: #6E6D67;
+  --idle-bg: rgba(0, 0, 0, .05);
+
+  /* ---- 状态色：绿（输出中）---- */
+  --run-fg: #1F7A42;
+  --run-bg: #E4F5EA;
+  --run-dot: #35A75F;
+
+  /* ---- 状态色：蓝（有新结果）---- */
+  --unread-fg: #1B5FBE;
+  --unread-bg: #E7F0FD;
+  --unread-dot: #3B82F6;
+
+  /* ---- 状态色：琥珀（待你确认）---- */
+  --warn-fg: #A85D06;
+  --warn-bg: #FFF2DC;
+  --warn-dot: #E08A12;
+
+  /* ---- 中性色 ---- */
+  --text: #1B1B19;
+  --text-dim: #71706A;
+  --text-faint: #A0A099;
+  --line: rgba(0, 0, 0, .065);
+  --line-strong: rgba(0, 0, 0, .11);
+
+  /* ---- 面板表面（毛玻璃）---- */
+  --surface: rgba(252, 252, 250, .84);
+  --surface-blur: blur(28px) saturate(1.7);
+  --card: #FFFFFF;
+  --card-hover: #FAFAF7;
+  --card-line: rgba(0, 0, 0, .055);
+
+  /* ---- 阴影 ---- */
+  --shadow-panel:
+    0 1px 1px rgba(0, 0, 0, .04),
+    0 8px 24px rgba(0, 0, 0, .13),
+    0 24px 56px rgba(0, 0, 0, .10);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, .045);
+  --shadow-ball:
+    0 2px 6px rgba(0, 0, 0, .16),
+    0 10px 28px rgba(0, 0, 0, .18);
+
+  /* ---- 悬浮球 ---- */
+  --ball-hi: #FFFFFF;
+  --ball-mid: #F4F4F0;
+  --ball-lo: #D9D9D2;
+  --ball-ring: #5B7FB0;
+  --ball-ring-2: #7E9EC9;
+  --ball-ink: #2A2A27;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --idle-fg: #A3A29C;
+  --idle-bg: rgba(255, 255, 255, .07);
+
+  --run-fg: #6CD494;
+  --run-bg: rgba(76, 200, 118, .15);
+  --run-dot: #4CC876;
+
+  --unread-fg: #82B6F8;
+  --unread-bg: rgba(96, 158, 240, .16);
+  --unread-dot: #60A0F0;
+
+  --warn-fg: #F2AE4C;
+  --warn-bg: rgba(236, 162, 60, .16);
+  --warn-dot: #ECA23C;
+
+  --text: #F2F2EF;
+  --text-dim: #A5A49E;
+  --text-faint: #77766F;
+  --line: rgba(255, 255, 255, .085);
+  --line-strong: rgba(255, 255, 255, .14);
+
+  --surface: rgba(30, 30, 32, .82);
+  --card: rgba(255, 255, 255, .055);
+  --card-hover: rgba(255, 255, 255, .09);
+  --card-line: rgba(255, 255, 255, .07);
+
+  --shadow-panel:
+    0 1px 1px rgba(0, 0, 0, .30),
+    0 10px 30px rgba(0, 0, 0, .50),
+    0 28px 64px rgba(0, 0, 0, .40);
+  --shadow-card: none;
+  --shadow-ball:
+    0 2px 8px rgba(0, 0, 0, .45),
+    0 12px 32px rgba(0, 0, 0, .35);
+
+  --ball-hi: #56565C;
+  --ball-mid: #3A3A3F;
+  --ball-lo: #232327;
+  --ball-ring: #6E8FBE;
+  --ball-ring-2: #93AFD4;
+  --ball-ink: #EDEDEA;
+}
