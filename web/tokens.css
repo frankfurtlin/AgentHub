@@ -77,8 +77,15 @@
   --line: rgba(0, 0, 0, .065);
   --line-strong: rgba(0, 0, 0, .11);
 
-  /* ---- 面板表面（毛玻璃）---- */
-  --surface: rgba(252, 252, 250, .84);
+  /* ---- 面板表面 ----
+     下面那个 backdrop-filter 其实是摆设：面板是无边框透明窗口，浏览器采不到
+     窗口**外**的像素，没东西可模糊，一直只有底色在扛。留一点透明也只会让背后
+     窗口的文字透上来、面板发灰发脏，所以这里直接用不透明纯色。
+     （反复试过 .84 / .92 / .94 / .96，都会透出底下编辑器的字。）
+
+     底色刻意比卡片（#FFFFFF）暗一档 —— 不然两个都接近白，卡片会糊进背景里，
+     层次全靠那根 1px 描边撑着，很勉强。 */
+  --surface: #F3F2EE;
   --surface-blur: blur(28px) saturate(1.7);
   --card: #FFFFFF;
   --card-hover: #FAFAF7;
@@ -94,12 +101,19 @@
     0 2px 6px rgba(0, 0, 0, .16),
     0 10px 28px rgba(0, 0, 0, .18);
 
-  /* ---- 悬浮球 ---- */
-  --ball-hi: #FFFFFF;
-  --ball-mid: #F4F4F0;
-  --ball-lo: #D9D9D2;
-  --ball-ring: #5B7FB0;
-  --ball-ring-2: #7E9EC9;
+  /* ---- 悬浮球：一只原创水豚 ----
+     形象是自家画的（没有用任何现成 IP 的素材）。水豚这个物种本身没有版权，
+     但命名、配色、五官组合都是独立设计的——具体缘由见 README 的「关于形象」。 */
+  --capy-hi: #F0D2A2;        /* 头顶受光面 */
+  --capy-mid: #DCAE72;       /* 主体毛色 */
+  --capy-lo: #BE8F55;        /* 背光面 */
+  --capy-ear: #B0793F;       /* 耳朵（比脸深一档） */
+  --capy-muzzle: #F6E8CE;    /* 吻部 */
+  --capy-ink: #4A3726;       /* 眼鼻 */
+  --capy-blush: #E89A70;     /* 腮红 */
+
+  --ball-ring: #7A6A58;      /* 平静时的环，暖灰，和毛色同调 */
+  --ball-ring-2: #9C8873;
   --ball-ink: #2A2A27;
 }
 
@@ -127,7 +141,7 @@
   --line: rgba(255, 255, 255, .085);
   --line-strong: rgba(255, 255, 255, .14);
 
-  --surface: rgba(30, 30, 32, .82);
+  --surface: #1E1E20;
   --card: rgba(255, 255, 255, .055);
   --card-hover: rgba(255, 255, 255, .09);
   --card-line: rgba(255, 255, 255, .07);
@@ -141,10 +155,15 @@
     0 2px 8px rgba(0, 0, 0, .45),
     0 12px 32px rgba(0, 0, 0, .35);
 
-  --ball-hi: #56565C;
-  --ball-mid: #3A3A3F;
-  --ball-lo: #232327;
-  --ball-ring: #6E8FBE;
-  --ball-ring-2: #93AFD4;
+  --capy-hi: #D0A56B;
+  --capy-mid: #A87F4C;
+  --capy-lo: #83603A;
+  --capy-ear: #6E5030;
+  --capy-muzzle: #CBA98A;
+  --capy-ink: #241A10;
+  --capy-blush: #A66A4E;
+
+  --ball-ring: #9C8873;
+  --ball-ring-2: #B8A48C;
   --ball-ink: #EDEDEA;
 }

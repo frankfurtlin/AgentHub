@@ -51,10 +51,14 @@ body[data-view="ball"].is-dragging { cursor: grabbing; }
   transition: filter var(--dur) var(--ease);
 }
 
-.ball__disk {
-  fill: url(#ball-core);
-  transition: fill var(--dur-slow) var(--ease);
-}
+/* 毛色渐变的三个 stop。颜色只能从这里给：<stop> 不认 stop-color="var(...)"，
+   详见 index.html 里的说明。 */
+.fur-hi  { stop-color: var(--capy-hi); }
+.fur-mid { stop-color: var(--capy-mid); }
+.fur-lo  { stop-color: var(--capy-lo); }
+
+/* 头 —— 毛色渐变。整只水豚的立体感全靠这一层，不再叠高光块 */
+.capy__head { fill: url(#capy-fur); }
 
 .ball__ring {
   fill: none;
@@ -66,12 +70,25 @@ body[data-view="ball"].is-dragging { cursor: grabbing; }
 /* 待你确认时，环加粗一圈 */
 .ball[data-level="2"] .ball__ring { stroke-width: 3.2; }
 
-.ball__gloss {
-  fill: #FFFFFF;
-  opacity: .5;
-  pointer-events: none;
+/* ---- 表情 ----
+   眨眼别太频繁：悬浮球一直挂在视野边缘，动多了反而分神。周期给到 6.4s，
+   真正闭合只有 0.16s 出头。两只眼错开 60ms，不然像贴了两张一样的贴纸。 */
+.capy__eye {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: capy-blink 6.4s var(--ease) infinite;
 }
-:root[data-theme="dark"] .ball__gloss { opacity: .12; }
+.capy__eye:nth-child(2) { animation-delay: .06s; }
+
+@keyframes capy-blink {
+  0%, 93%, 100% { transform: scaleY(1); }
+  95.5%         { transform: scaleY(.12); }
+}
+
+/* 有情况就把眼睛睁大一点 —— 用独立的 scale 属性叠上去。
+   不能写进 transform：那条已经被眨眼动画占着，写进去两者互相覆盖。 */
+.ball[data-level="1"] .capy__eye { scale: 1.06; }
+.ball[data-level="2"] .capy__eye { scale: 1.17; }
 
 /* 四个状态点：一个工具一个，颜色就是它此刻的状态 */
 .ball__dots circle {
@@ -162,6 +179,12 @@ body[data-view="panel"] {
   height: 22px;
   flex: none;
 }
+/* 22px 见不出渐变，纯色就够，认得出来是同一只水豚即可 */
+.mark__ear    { fill: var(--capy-ear); }
+.mark__head   { fill: var(--capy-mid); }
+.mark__muzzle { fill: var(--capy-muzzle); }
+.mark__eye    { fill: var(--capy-ink); }
+.mark__nose   { fill: var(--capy-ink); opacity: .7; }
 
 .panel__title {
   font-size: var(--fs-lg);

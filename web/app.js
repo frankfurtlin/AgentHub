@@ -90,10 +90,12 @@
 
   // ---------------------------------------------------------------- 悬浮球
 
-  /* 2×2 点阵：一个工具一个点，位置固定，颜色随状态变 */
-  var DOT_POS = [[30.5, 30.5], [45.5, 30.5], [30.5, 45.5], [45.5, 45.5]];
+/* 四个状态点横排在水豚下巴底下，一个工具一个点，颜色随状态变。
+   原来是 2×2 点阵摆在球心，现在球心让给脸了，整体下移成一排。 */
+var DOT_POS = [[26, 61.5], [34, 61.5], [42, 61.5], [50, 61.5]];
+var DOT_R = 2.9;
 
-  function mountBall() {
+function mountBall() {
     var node = document.getElementById('tpl-ball').content.firstElementChild.cloneNode(true);
     document.body.appendChild(node);
     state.nodes.ball = node;
@@ -112,9 +114,9 @@
     var dots = node.querySelector('.ball__dots');
     dots.innerHTML = '';
     agents.forEach(function (agent, index) {
-      var pos = DOT_POS[index] || [38, 38];
+      var pos = DOT_POS[index] || [38, 68];
       dots.appendChild(svgEl('circle', {
-        cx: pos[0], cy: pos[1], r: 5, fill: statusColor(agent)
+        cx: pos[0], cy: pos[1], r: DOT_R, fill: statusColor(agent)
       }));
     });
 
