@@ -114,14 +114,15 @@ body[data-view="ball"].is-dragging { cursor: grabbing; }
   100% { transform: scale(1.22); opacity: 0; }
 }
 
-/* ---- 右上角徽标 ---- */
+/* ---- 右上角徽标 ----
+   尺寸克制在 20：球只有 76，水豚的右耳就在这个角上，再大会把耳朵压掉一半。 */
 .ball__badge {
   position: absolute;
   top: 0;
   right: 0;
-  min-width: 22px;
-  height: 22px;
-  padding: 0 5px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 4px;
   display: grid;
   place-items: center;
   border-radius: var(--r-pill);

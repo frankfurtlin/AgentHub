@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agenthub"
-version = "0.2.5"
+version = "0.2.6"
 description = "悬浮球 + 状态面板：把本机几个 GUI 版 AI 编程助手的状态收进一个小窗口"
 readme = "README.md"
 requires-python = ">=3.10"
