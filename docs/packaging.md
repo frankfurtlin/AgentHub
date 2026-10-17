@@ -17,10 +17,14 @@ CI 打包：由 `.github/workflows/build.yml` 在每次 push 到 main 时自动�
 
 产物落在 `dist/`：
 
-| 平台 | 目录形式 | 最终产物 |
-|---|---|---|
-| Windows | `dist/AgentHub/AgentHub.exe` | `AgentHub-windows-x64.zip` |
-| macOS | `dist/AgentHub.app` | `AgentHub-macos-arm64.zip` / `AgentHub-macos-x64.zip` |
+| 平台 | 目录形式 | 最终产物 | 实测体积 |
+|---|---|---|---|
+| Windows x64 | `dist/AgentHub/AgentHub.exe` | `AgentHub-windows-x64.zip` | 13.3 MB |
+| macOS arm64 | `dist/AgentHub.app` | `AgentHub-macos-arm64.zip` | 19.7 MB |
+| macOS x64 | `dist/AgentHub.app` | `AgentHub-macos-x64.zip` | 21.4 MB |
+
+macOS 两个包更大，是因为 pyobjc 那一套框架（Cocoa / Quartz / WebKit）
+比 Windows 上的 pythonnet 重。
 
 ---
 

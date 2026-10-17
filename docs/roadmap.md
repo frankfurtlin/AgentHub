@@ -87,7 +87,7 @@ python tools/build.py --clean --zip
   入口         agenthub/__main__.py
   需要打包     web/、assets/（都是 --add-data）、LICENSE
   要排除的     tkinter、numpy、PyQt、pytest、PIL、win32com
-  实测体积     12 MB（Windows x64，onedir）
+  实测体积     Windows x64 zip 13.3 MB / macOS arm64 19.7 MB / macOS x64 21.4 MB
 ```
 
 三个注意点：
