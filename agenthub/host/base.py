@@ -205,6 +205,14 @@ class Backend(ABC):
         """
         return False
 
+    def make_tool_window(self, native) -> bool:
+        """把窗口从任务栏里摘掉。不支持时返回 False（比如平台另有做法）。
+
+        挂件类窗口本来就该待在托盘里，占一个任务栏按钮既碍事又和别的窗口
+        混在一起——入口交给托盘图标（见 tray.py）。
+        """
+        return False
+
     # ---------------- 拖动跟随的快速通道（默认没有，Windows 后端覆盖） ----------------
 
     def window_pos(self, native) -> tuple[int, int] | None:
@@ -218,6 +226,22 @@ class Backend(ABC):
     def work_area(self) -> tuple[int, int, int, int] | None:
         """主屏工作区（物理像素）。不支持时返回 None。"""
         return None
+
+    def attach_follow(self, source_native, target_native, sizes) -> bool:
+        """让目标窗口逐帧跟随源窗口（Windows 上是挂消息钩子）。
+
+        `sizes` = (源窗口宽, 目标窗口宽, 目标窗口高, 间隙, 边距)，逻辑像素。
+        不支持时返回 False，调用方退回轮询方案。
+        """
+        return False
+
+    def sync_follow(self) -> bool:
+        """按源窗口当前位置立刻纠一次位。不支持时返回 False。"""
+        return False
+
+    def detach_follow(self) -> None:
+        """摘掉跟随（切换面板显隐时调用）。"""
+        return
 
     def alert_sound(self, level: int = 2) -> None:
         """需要你出手时响一下。

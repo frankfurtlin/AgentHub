@@ -14,6 +14,6 @@
     web/             前端（原生 HTML/CSS/JS，零构建）
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.8"
 
 __all__ = ["__version__"]

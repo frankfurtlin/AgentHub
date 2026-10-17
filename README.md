@@ -206,6 +206,12 @@ tools/
   `Last-Modified` 和 `ETag`），WebView2 于是走启发式缓存，新鲜期大约是文件年龄的
   10%。所以 `web/index.html` 里的资源路径带了 `?v=`（一个手动递增的缓存键，跟包版本
   无关，改前端时顺手加一下就行）。
+
+  但**光有 `?v=` 不够**：它只让 CSS/JS 换新，`index.html` 自己也会被缓存，于是改了前端、
+  重启了进程，界面上还是旧样式（踩过一次，排查了半天以为样式没生效）。所以
+  `webview_env._clear_cache_on_version_change()` 在启动时比对 `agenthub.__version__`，
+  版本一变就删掉 WebView2 的 `Cache` / `Code Cache`。**改前端记得同时升 `__version__`**，
+  否则本地看到的还是旧界面。
 - **桥是分两步注入的**：pywebview 先把 `window.pywebview = {api: {}}` 建出来并派发
   `pywebviewready`，隔一会儿才把真正的方法挂上去。中间那一小段里 `window.pywebview.api`
   是个真值、却不是能用的桥，拿它调方法会抛 `TypeError`。如果启动逻辑只判断「桥在不在」、

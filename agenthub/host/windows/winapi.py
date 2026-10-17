@@ -288,6 +288,161 @@ def work_area_phys() -> tuple[int, int, int, int] | None:
     return int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
 
 
+# ---------------------------------------------------------------- 窗口跟随
+
+WM_MOVE = 0x0003
+WM_NCDESTROY = 0x0082
+GWLP_WNDPROC = -4
+
+#: 窗口过程签名：LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM)
+WNDPROC = ctypes.WINFUNCTYPE(
+    ctypes.c_ssize_t,      # LRESULT
+    wintypes.HWND,         # hWnd
+    ctypes.c_uint,         # uMsg
+    ctypes.c_size_t,       # wParam
+    ctypes.c_ssize_t,      # lParam
+)
+
+# SetWindowLongPtrW 在 32 位系统上不存在（那里要用 SetWindowLongW），兜一下
+_SetWindowLongPtr = getattr(user32, "SetWindowLongPtrW", None) or user32.SetWindowLongW
+_SetWindowLongPtr.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+_SetWindowLongPtr.restype = ctypes.c_void_p
+user32.CallWindowProcW.argtypes = [
+    ctypes.c_void_p, wintypes.HWND, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t,
+]
+user32.CallWindowProcW.restype = ctypes.c_ssize_t
+user32.DefWindowProcW.argtypes = [
+    wintypes.HWND, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t,
+]
+user32.DefWindowProcW.restype = ctypes.c_ssize_t
+
+# ---------------------------------------------------------------- 任务栏隐藏
+
+GWL_EXSTYLE = -20
+WS_EX_TOOLWINDOW = 0x00000080     # 工具窗：不出现在任务栏，也不进 Alt-Tab
+WS_EX_APPWINDOW = 0x00040000      # 强制任务栏按钮——pywebview 建窗时带上它了
+
+_GetWindowLongPtr = getattr(user32, "GetWindowLongPtrW", None) or user32.GetWindowLongW
+_GetWindowLongPtr.argtypes = [wintypes.HWND, ctypes.c_int]
+_GetWindowLongPtr.restype = ctypes.c_ssize_t
+
+
+def set_tool_window(hwnd: int) -> bool:
+    """把窗口改成「工具窗」：任务栏不再有按钮，Alt-Tab 里也不出现。
+
+    球和面板都是桌面挂件，挂在任务栏里既占地方（用户截图吐槽的那个 Python
+    图标窗口就是球），切 Alt-Tab 时还会打断正常工作流。托盘图标由 NotifyIcon
+    负责，见 tray.py。
+
+    直接改扩展样式，不走 WinForms 的 `ShowInTaskbar`——那个属性是靠**重建
+    窗口句柄**生效的，句柄一换，之前挂在球上的拖动跟随钩子、DPI 记录全作废。
+    """
+    if not hwnd:
+        return False
+    ex = int(_GetWindowLongPtr(wintypes.HWND(hwnd), GWL_EXSTYLE) or 0)
+    ex = (ex & ~WS_EX_APPWINDOW) | WS_EX_TOOLWINDOW
+    return bool(_SetWindowLongPtr(
+        wintypes.HWND(hwnd), GWL_EXSTYLE, ctypes.c_void_p(ex)))
+
+
+class DragFollower:
+    """把目标窗口钉在源窗口旁边，源窗口每移动一帧就同帧跟上。
+
+    做法是替换源窗口的窗口过程（`SetWindowLongPtrW(GWLP_WNDPROC)`），
+    在 `WM_MOVE` 里顺手把目标窗口 `SetWindowPos` 过去：原生拖动期间鼠标每动
+    一下就来一条 `WM_MOVE`，所以面板是跟着球逐帧走的，全程在 GUI 线程内
+    同一帧完成。
+
+    **为什么不用 `SetWindowSubclass`**（那个更"正规"）：它要求由窗口所属线程
+    调用。我们是从后台线程挂的钩子，实测在 pywebview 的 WinForms 窗体上
+    直接返回 FALSE、一帧都跟不动。`SetWindowLongPtrW` 允许跨线程安装，
+    回调仍旧在窗口所属线程（GUI 线程）里执行，效果一样。
+
+    为什么不用轮询（哪怕 16ms 一轮也到不了 60fps 的手感）：
+      1. Windows 的等待粒度就是 15.6ms 起，`Event.wait(0.016)` 精度不够；
+      2. `SetWindowPos` 跨线程要等窗口所属线程处理完消息才返回，
+         而那个线程正忙在自己的拖动消息循环里。
+
+    生命周期：回调必须一直有 Python 侧引用（ctypes 回调被回收就崩），
+    所以实例登记在 `_registry` 里；`remove()` 把原窗口过程写回去。
+    """
+
+    _registry: dict[int, "DragFollower"] = {}
+    _next_id = 1
+
+    def __init__(self, source: int, target: int, ball: int, panel_w: int,
+                 panel_h: int, gap: int, margin: int) -> None:
+        self.source = int(source)
+        self.target = int(target)
+        self.ball = int(ball)
+        self.panel_w = int(panel_w)
+        self.panel_h = int(panel_h)
+        self.gap = int(gap)
+        self.margin = int(margin)
+        self.work = work_area_phys()
+        self.moves = 0                     # 跟着源窗口走了多少帧，排查用
+        self._uid = 0
+        self._old_proc = None
+        self._proc_ref = WNDPROC(self._proc)
+
+    # ---------------- 装卸
+
+    def install(self) -> bool:
+        uid = DragFollower._next_id
+        DragFollower._next_id += 1
+        DragFollower._registry[uid] = self
+        prev = _SetWindowLongPtr(
+            self.source, GWLP_WNDPROC, ctypes.cast(self._proc_ref, ctypes.c_void_p))
+        if not prev or int(prev) == int(ctypes.cast(self._proc_ref, ctypes.c_void_p).value):
+            DragFollower._registry.pop(uid, None)
+            return False
+        self._old_proc = prev
+        self._uid = uid
+        return True
+
+    def remove(self) -> None:
+        if not self._uid:
+            return
+        try:
+            _SetWindowLongPtr(self.source, GWLP_WNDPROC, self._old_proc)
+        finally:
+            DragFollower._registry.pop(self._uid, None)
+            self._uid = 0
+            self._old_proc = None
+
+    # ---------------- 摆位
+
+    def follow(self) -> None:
+        """按源窗口当前的位置摆好目标窗口（消息钩子里直接调，也供外部纠偏）。"""
+        rect = RECT()
+        if not user32.GetWindowRect(self.source, ctypes.byref(rect)):
+            return
+        bx, by = int(rect.left), int(rect.top)
+        px = bx - self.panel_w - self.gap
+        if px < self.margin:               # 左边放不下就换到源窗口右边
+            px = bx + self.ball + self.gap
+        py = by + self.ball - self.panel_h
+        if self.work is not None:
+            px = max(self.margin, min(px, self.work[2] - self.panel_w - self.margin))
+            py = max(self.margin, min(py, self.work[3] - self.panel_h - self.margin))
+        move_window_phys(self.target, px, py)
+
+    # ---------------- 消息钩子
+
+    def _proc(self, hwnd, msg, wparam, lparam):
+        if msg == WM_MOVE:
+            self.follow()
+            self.moves += 1
+        elif msg == WM_NCDESTROY:
+            # 窗口要没了：别再往回写窗口过程（写了就是往尸体上挂钩子）
+            DragFollower._registry.pop(self._uid, None)
+            self._uid = 0
+            self._old_proc = None
+        if self._old_proc:
+            return user32.CallWindowProcW(self._old_proc, hwnd, msg, wparam, lparam)
+        return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+
 def activate_window(hwnd: int) -> bool:
     """把窗口切到前台，自动处理最小化 / 隐藏 / 前台锁定三种情况。
 

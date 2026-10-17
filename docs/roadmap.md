@@ -85,7 +85,7 @@
 ```
 PyInstaller --noconsole --onefile
   入口         agenthub/__main__.py
-  需要打包     web/（--add-data）、LICENSE
+  需要打包     web/、agenthub/assets/（都是 --add-data）、LICENSE
   要排除的     tkinter、numpy、PyQt、pytest（pywebview 会把一堆无关的依赖拖进来）
   体积目标     Windows 上 15~25 MB（不带 Qt、不带 Chromium）
 ```

@@ -144,10 +144,53 @@ def apply(config=None) -> list[str]:
 
 
 def profile_dir(base_dir: str) -> str:
-    """给 WebView2 的 profile 目录（见模块开头第二条）。"""
+    """给 WebView2 的 profile 目录（见模块开头第二条）。
+
+    顺带处理前端缓存——见 `_clear_cache_on_version_change`。
+    """
     path = os.path.join(base_dir, "webview")
     os.makedirs(path, exist_ok=True)
+    _clear_cache_on_version_change(path)
     return path
+
+
+#: 只清这两层。别整个目录删：那里还有 Cookie、localStorage、GPU 缓存之类，
+#: 删了整个 profile 会让 WebView2 重建一遍（启动慢好几秒），也会丢掉
+#: 「已读过哪些通知」之类将来可能用上的状态。
+_CACHE_DIRS = ("Cache", "Code Cache")
+
+
+def _clear_cache_on_version_change(profile: str) -> None:
+    """版本号变了就清一次 WebView2 的 HTTP 缓存。
+
+    为什么非清不可：前端资源（index.html / style.css / app.js）都在本地，
+    WebView2 会按启发式规则缓存它们。`?v=` 只能绕开被它引用的 CSS/JS——
+    **index.html 自己**一旦被缓存，改前端就等于没改（实测：改了 CSS、
+    重启了进程，界面上还是旧样式，排查了半天）。所以版本一升就把缓存清掉，
+    这样「改前端 → 升版本 → 重启」三步必然生效。
+    """
+    import shutil
+
+    from . import __version__
+
+    marker = os.path.join(profile, ".frontend-version")
+    try:
+        with open(marker, "r", encoding="utf-8") as handle:
+            seen = handle.read().strip()
+    except OSError:
+        seen = ""
+    if seen == __version__:
+        return
+
+    root = os.path.join(profile, "EBWebView", "Default")
+    for name in _CACHE_DIRS:
+        shutil.rmtree(os.path.join(root, name), ignore_errors=True)
+    try:
+        with open(marker, "w", encoding="utf-8") as handle:
+            handle.write(__version__)
+    except OSError:
+        pass
+    print("[AgentHub] 前端版本 %s，已清理 WebView2 缓存" % __version__, flush=True)
 
 
 def start_options(config=None, base_dir: str | None = None) -> dict:
@@ -210,10 +253,57 @@ def _hwnd_of(form) -> int:
 
 
 def _paint_black(form) -> None:
-    """把窗体底色刷成纯黑——这是 DWM 玻璃的键色。"""
+    """把窗体底色刷成纯黑——这是 DWM 玻璃的键色。
+
+    已经是黑的不再重复赋值 + Refresh：这个函数现在会被周期性重调（见
+    `patch_transparency` 的 `force`），每次都刷一遍会让整块界面重绘。
+    """
     from webview.platforms import winforms as wf
-    form.BackColor = wf.Color.FromArgb(255, *_GLASS_BLACK)
+    black = wf.Color.FromArgb(255, *_GLASS_BLACK)
+    try:
+        if form.BackColor.ToArgb() == black.ToArgb():
+            return
+    except Exception:
+        pass
+    form.BackColor = black
     form.Refresh()
+
+
+_webview_warned = False
+
+
+def _webview_transparent(form) -> bool:
+    """把 WebView2 自己的背景色重设为「透明」。
+
+    pywebview 只在建窗那一刻设过一次（edgechromium.py：`DefaultBackgroundColor
+    = Color.Transparent`，而且是在 `EnsureCoreWebView2Async` **之前**设的）。
+    实测跑久了这一层会退回不透明白底——桌面上的表现就是球的四角浮出一块近白
+    的方块（球芯照常，四角 `#FBFBFB`/`#F6F6F6` 而窗外是 `#FFFFFF`）。所以和
+    玻璃一起周期性重设，谁丢了补谁。
+    """
+    global _webview_warned
+    try:
+        from System.Drawing import Color
+        browser = getattr(form, "browser", None)
+        webview = getattr(browser, "webview", None)
+        if webview is None:
+            return False
+        # 已经是透明的就不重复写：这个函数每十来秒跑一遍，稳态下别白白触发重绘
+        try:
+            current = webview.DefaultBackgroundColor
+            if int(current.A) == 0:
+                return True
+        except Exception:
+            pass
+        # ⚠️ 必须跑在 UI 线程：CoreWebView2Controller 的成员跨线程访问会抛
+        # InvalidOperationException（实测）。调用方是经 form.Invoke 进来的。
+        webview.DefaultBackgroundColor = Color.Transparent
+        return True
+    except Exception as exc:
+        if not _webview_warned:
+            _webview_warned = True
+            print("[AgentHub] 设 WebView2 透明背景失败：%r" % exc, flush=True)
+        return False
 
 
 def _apply_glass(form) -> bool:
@@ -263,7 +353,7 @@ def _apply_region(form, radius: int) -> bool:
     return _user32.SetWindowRgn(wintypes.HWND(hwnd), rgn, True) != 0
 
 
-def patch_transparency(window, radius: int = 0) -> bool:
+def patch_transparency(window, radius: int = 0, force: bool = False) -> bool:
     """补上 pywebview 漏掉的窗口透明。True = 已处理好，False = 还没就绪、下轮再试。
 
     见模块开头第三条。三种做法的实测对照（`_shots/plans_probe.py`，95×95 圆球：
@@ -276,6 +366,12 @@ def patch_transparency(window, radius: int = 0) -> bool:
     `radius` 只在兜底裁剪时用：悬浮球给直径的一半（裁成圆），面板给圆角半径。
     主方案不吃这个参数，传 0 也无妨。
 
+    ⚠️ `force=True`——「不管之前补没补过，再补一次」。玻璃是**挂在窗口句柄上
+    的**：DWM 重启、显示器休眠唤醒、主题切换之后玻璃会整片丢掉，而窗口还活得
+    好好的（Tag 标记也还在），于是补丁会被永久跳过，球外面重新裹上一层窗体
+    底色——跑一整夜之后特别容易撞上。所以除了首次，还得每隔一阵子重新确认。
+    重新补一次是幂等的：把底色刷黑 + 再扩一次玻璃，成本就两三个 Win32 调用。
+
     调用方要注意线程——`_loop` 跑在子线程，而 WinForms 控件归建窗那条线程管，
     所以这里先用 `InvokeRequired` 判断，需要的话 Invoke 过去再改。
     """
@@ -283,13 +379,14 @@ def patch_transparency(window, radius: int = 0) -> bool:
     if form is None:
         return False                    # 窗体还没建好
 
-    try:
-        if form.Tag is not None and str(form.Tag).startswith("transparency:"):
-            return True                 # 补过了，每补一次都要重算样式，别重复
-    except Exception:
-        pass
-
+    if not force:
+        try:
+            if form.Tag is not None and str(form.Tag).startswith("transparency:"):
+                return True             # 补过了，每补一次都要重算样式，没必要重复
+        except Exception:
+            pass
     def job() -> bool:
+        _webview_transparent(form)      # 浏览器那层背景（时间久了会退回白底）
         glass = _apply_glass(form)
         ok = glass or _apply_region(form, radius)
         if ok:

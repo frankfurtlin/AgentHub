@@ -79,6 +79,7 @@ class WindowsBackend(Backend):
 
     def __init__(self) -> None:
         self._notify = WinNotificationSource()
+        self._follower = None       # 面板跟随球的消息钩子（见 attach_follow）
 
     # ---------------- 窗口
 
@@ -157,6 +158,21 @@ class WindowsBackend(Backend):
             return False
         return winapi.start_window_drag(hwnd)
 
+    def make_tool_window(self, native) -> bool:
+        """让这个窗口从任务栏消失（改成工具窗，见 winapi.set_tool_window）。
+
+        ⚠️ 只用改扩展样式这一条路，**不要**去动 WinForms 的 `ShowInTaskbar`：
+        那个属性是靠**重建窗口句柄**生效的。实测在启动阶段改它，会把正在异步
+        初始化的 WebView2 打断（`E_ABORT`，两个窗口一起白屏），句柄换掉之后
+        窗口还会变成不可见。改扩展样式不动句柄，代价是某些 `Show()` 之后
+        实测（`_shots/toolwindow_probe.py`）改完之后 `Show()` 不会把样式揉回来，
+        但调用方仍旧在显隐之后补一次、另有周期性兜底，买个保险。
+        """
+        hwnd = _native_handle(native)
+        if not hwnd:
+            return False
+        return winapi.set_tool_window(hwnd)
+
     # ---------------- 拖动跟随的快速通道（物理像素，直连 Win32） ----------------
 
     def window_pos(self, native) -> tuple[int, int] | None:
@@ -176,6 +192,45 @@ class WindowsBackend(Backend):
     def work_area(self) -> tuple[int, int, int, int] | None:
         """主屏工作区，物理像素。"""
         return winapi.work_area_phys()
+
+    def attach_follow(self, source_native, target_native, sizes) -> bool:
+        """把目标窗口钉在源窗口旁边，源窗口每移动一帧同帧跟上。
+
+        `sizes` = (球直径, 面板宽, 面板高, 间隙, 边距)，**逻辑像素**——
+        后端自己折成物理像素（GetWindowRect / SetWindowPos 都是物理的）。
+        挂消息钩子而不是轮询的原因见 winapi.DragFollower 的docstring。
+        挂不上（拿不到句柄等）返回 False，调用方退回轮询跟随。
+        """
+        source = _native_handle(source_native)
+        target = _native_handle(target_native)
+        if not source or not target:
+            return False
+        scale = self.screen_scale()
+        ball, panel_w, panel_h, gap, margin = sizes
+        follower = winapi.DragFollower(
+            source, target,
+            ball=int(ball * scale),
+            panel_w=int(panel_w * scale),
+            panel_h=int(panel_h * scale),
+            gap=int(gap * scale),
+            margin=int(margin * scale),
+        )
+        if not follower.install():
+            return False
+        self._follower = follower
+        return True
+
+    def sync_follow(self) -> bool:
+        """按源窗口当前位置立刻纠一次位（挂上钩子后先对齐，不等下一次 WM_MOVE）。"""
+        if self._follower is None:
+            return False
+        self._follower.follow()
+        return True
+
+    def detach_follow(self) -> None:
+        if self._follower is not None:
+            self._follower.remove()
+            self._follower = None
 
     def alert_sound(self, level: int = 2) -> None:
         """审批响三声短促的升调；只是「跑完了」就一声轻响。

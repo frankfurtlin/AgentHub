@@ -24,7 +24,7 @@ import time
 
 import webview
 
-from . import webview_env
+from . import tray, webview_env
 from .config import Config
 from .models import AGENTS
 from .runtime import Runtime
@@ -45,9 +45,12 @@ PANEL_W = 344      # 面板宽
 PANEL_H = _panel_height()      # 面板高
 MARGIN = 24        # 球离屏幕边缘的默认距离
 GAP = 12           # 面板与球之间的间隙
+EDGE = 8           # 面板离屏幕边缘的最小留白
 PANEL_RADIUS = 18  # 面板圆角半径（页面 CSS 里是同一个值，透明兜底裁剪要用）
 POS_SAVE_EVERY = 4  # 每几轮扫描记一次球的位置（拖动后要记住）
 SETTLE_SECONDS = 6.0  # 启动后盯着面板、别让它自己冒出来的时长（见 _guard_panel_hidden）
+FOLLOW_TRIES = 10   # 面板每次展开后最多试几次挂跟随钩子（窗口原生对象可能还没就绪）
+TRANSPARENCY_EVERY = 6   # 每几轮扫描重设一次窗口透明（约 9 秒，见 _patch_transparency）
 
 
 def web_dir() -> str:
@@ -153,6 +156,17 @@ class AgentHubApp:
         # 自己记面板的显隐：pywebview 的 window.hidden 是异步读的，
         # show() 之后立刻读还可能拿到旧值，据此判断会来回抽风。
         self._panel_shown = False
+        # 面板是否已挂上「逐帧跟随」的消息钩子（拿不到原生句柄时会是 False，
+        # 那种情况退回 _follow_ball 的轮询方案）
+        self._follower_on = False
+        self._follow_tries = 0     # 面板本次展开后试了几次挂钩子
+        # 窗口原生改造：从任务栏摘掉（改成工具窗）+ 挂托盘图标。
+        # 两件事都要等窗口的原生对象就绪，所以走「每轮试一次」的路子。
+        self._chrome_todo = []
+        self._tray_ready = False
+        self._tray_icon = None
+        self._tray_text = ""
+        self._transparency_done = False
 
     # ---------------- 窗口
 
@@ -229,9 +243,10 @@ class AgentHubApp:
         )
         # 两个窗口的透明都要等窗体真正建出来之后才补得上，见 _patch_transparency。
         # 第二个元素是兜底裁剪用的半径：球裁成圆，面板按圆角裁。
-        self._transparency_todo = [
+        self._transparency_targets = [
             (self.ball, BALL // 2), (self.panel, PANEL_RADIUS)
         ] if self.ball is not None and self.panel is not None else []
+        self._chrome_todo = [self.ball, self.panel]
         return self
 
     # ---------------- 运行
@@ -250,6 +265,18 @@ class AgentHubApp:
 
     def quit(self) -> None:
         self._stop.set()
+        self._detach_follow()
+        # 托盘图标不主动 Dispose 的话，进程退出了图标还会挂在托盘里，
+        # 一直等鼠标划过去才消失——这是个很常见的"程序关了但没完全关"。
+        icon = getattr(self, "_tray_icon", None)
+        if icon is not None:
+            try:
+                icon.Visible = False
+                icon.Dispose()
+            except Exception:
+                pass
+            self._tray_icon = None
+            self._tray_ready = False
         try:
             for win in (self.ball, self.panel):
                 if win is not None:
@@ -267,6 +294,7 @@ class AgentHubApp:
                 self._settle_windows()
                 self._place_ball_default()
             self._patch_transparency()
+            self._settle_chrome()
             try:
                 snapshot = self.runtime.refresh()
                 self._push(snapshot)
@@ -284,14 +312,70 @@ class AgentHubApp:
         原因和实测数据见 `webview_env.patch_transparency`。
 
         放在循环里而不是 `_settle_windows()` 里一次做完，是因为窗口是并行建的：
-        循环刚跑起来时窗体未必登记好了。每轮试一次，都成了就空转返回。
+        循环刚跑起来时窗体未必登记好了。每轮试一次，直到两个窗口都成了。
+
+        ⚠️ 补完**不能撒手**。透明有两层，两层都会跑丢：
+            1. 窗体底色 + DWM 玻璃——玻璃挂在窗口句柄上，DWM 重启、显示器
+               唤醒之后会整片丢；
+            2. WebView2 自己的背景色——pywebview 只在建窗时设过一次，
+               跑久了会退回不透明白底。
+        任意一层丢了，球的四角就浮出一块近白方块，而且不会自愈。所以除了
+        首次，每 `TRANSPARENCY_EVERY` 轮无条件重设一遍（两件事都是幂等的）。
         """
-        if not self._transparency_todo:
+        if not self._transparency_targets:
             return
-        self._transparency_todo = [
-            item for item in self._transparency_todo
-            if not webview_env.patch_transparency(item[0], item[1])
-        ]
+        periodic = self._ticks > 0 and self._ticks % TRANSPARENCY_EVERY == 0
+        if self._transparency_done and not periodic:
+            return
+
+        pending = 0
+        for win, radius in self._transparency_targets:
+            force = periodic or not self._transparency_done
+            if not webview_env.patch_transparency(win, radius, force=force):
+                pending += 1
+        if pending == 0 and not self._transparency_done:
+            self._transparency_done = True
+            _log("窗口透明：已生效（玻璃 + WebView2 透明背景）")
+
+    def _ensure_tool_window(self) -> None:
+        """补一次「任务栏里不要出现我」的样式。纯 Win32 改扩展样式，不动句柄。
+
+        实测（`_shots/toolwindow_probe.py`）：改成工具窗之后 `Show()` 并不会把
+        `WS_EX_APPWINDOW` 揉回来，句柄也不变。这里保留一次补刷是买个保险——
+        样式这类东西换个 WinForms/系统版本就未必还是这个行为，成本就两个
+        Win32 调用，不值得省。
+        """
+        for win in (self.ball, self.panel):
+            if win is None:
+                continue
+            native = getattr(win, "native", None)
+            if native is None:
+                continue
+            try:
+                self.runtime.backend.make_tool_window(native)
+            except Exception:
+                pass
+
+    def _settle_chrome(self) -> None:
+        """窗口的「外壳」改造：从任务栏摘掉，再装上托盘图标。
+
+        和透明补丁一个套路——都要等窗口的原生对象就绪，所以每轮试一次，
+        成了就从待办里划掉；托盘图标是幂等的（`tray.attach` 自己会挡重复）。
+
+        顺序有讲究：先把窗口改成工具窗，再装托盘。反过来的话托盘图标会在
+        任务栏里短暂多出一个入口，看着像闪了一下。
+        """
+        if self._chrome_todo:
+            for win in list(self._chrome_todo):
+                native = getattr(win, "native", None)
+                if native is None:
+                    continue
+                if self.runtime.backend.make_tool_window(native):
+                    self._chrome_todo.remove(win)
+        elif self._ticks > 0 and self._ticks % TRANSPARENCY_EVERY == 0:
+            self._ensure_tool_window()      # 周期性兜底，防止样式被揉回去
+        if not self._tray_ready:
+            tray.attach(self)
 
     def _settle_windows(self) -> None:
         """窗口建好之后的第一次摆正。两件事都得等 GUI 起来（要有窗口句柄）才能做。
@@ -371,6 +455,27 @@ class AgentHubApp:
                     "window.AgentHub && window.AgentHub.receive(%s)" % payload)
             except Exception:
                 pass
+        self._update_tray_text(snapshot)
+
+    def _update_tray_text(self, snapshot: dict) -> None:
+        """托盘图标的悬停提示。只在文案变了的时候写一次。"""
+        if not self._tray_ready:
+            return
+        totals = snapshot.get("totals") or {}
+        waiting = int(totals.get("waiting") or 0)
+        unread = int(totals.get("unread") or 0)
+        running = int(totals.get("running") or 0)
+        if waiting:
+            text = "AgentHub · %d 个在等你确认" % waiting
+        elif unread:
+            text = "AgentHub · %d 个有新结果" % unread
+        elif running:
+            text = "AgentHub · %d 个在跑" % running
+        else:
+            text = "AgentHub · 都闲着"
+        if text != self._tray_text:
+            self._tray_text = text
+            tray.set_text(self, text)
 
     def _on_alert(self, level: int, names: list[str]) -> None:
         _log("需要你出手（级别 %d）：%s" % (level, "、".join(names)))
@@ -398,9 +503,13 @@ class AgentHubApp:
                 self._panel_shown = True
                 self._place_panel()
                 self.panel.show()
+                self._attach_follow()
+                self._ensure_tool_window()
                 return True
+            self._detach_follow()
             self.panel.hide()
             self._panel_shown = False
+            self._ensure_tool_window()
             return False
         except Exception as exc:
             self._panel_shown = False
@@ -410,11 +519,58 @@ class AgentHubApp:
     def hide_panel(self) -> None:
         if self.panel is None or not self._panel_shown:
             return
+        self._detach_follow()
         try:
             self.panel.hide()
         except Exception:
             pass
         self._panel_shown = False
+
+    # ---------------- 跟随的生平
+
+    def _attach_follow(self) -> None:
+        """面板展开时把它挂到球上：球每移动一帧，面板同帧跟上，没有轮询延迟。
+
+        ⚠️ 别只看「面板是不是展开的」就认为挂得上：面板可能在窗口原生对象
+        还没就绪时就被推出来（启动时有告警的话，`_on_alert` 会直接弹面板）。
+        那种情况这里会返回 False，由 `_follow_ball` 线程隔一会儿重试——
+        所以这个函数要能被反复调用，幂等。
+        """
+        if self._follower_on or self.ball is None or self.panel is None:
+            return
+        native_ball = getattr(self.ball, "native", None)
+        native_panel = getattr(self.panel, "native", None)
+        if native_ball is None or native_panel is None:
+            # 还没就绪，交给重试。只在第一次说一声，别刷屏
+            if self._follow_tries <= 1:
+                _log("拖动跟随：窗口原生对象尚未就绪（ball=%s panel=%s），重试中"
+                     % (native_ball is not None, native_panel is not None))
+            return
+        backend = self.runtime.backend
+        try:
+            ok = backend.attach_follow(
+                native_ball, native_panel,
+                (BALL, PANEL_W, PANEL_H, GAP, EDGE),
+            )
+            if ok:
+                backend.sync_follow()       # 先对齐一次，不等下一次 WM_MOVE
+        except Exception as exc:
+            _log("挂拖动跟随失败：%r" % exc)
+            ok = False
+        self._follower_on = bool(ok)
+        if self._follower_on:
+            _log("拖动跟随：已挂消息钩子（逐帧同步）")
+        else:
+            _log("拖动跟随：SetWindowSubclass 没成功，退回轮询")
+
+    def _detach_follow(self) -> None:
+        if not self._follower_on:
+            return
+        try:
+            self.runtime.backend.detach_follow()
+        except Exception as exc:
+            _log("摘拖动跟随失败：%r" % exc)
+        self._follower_on = False
 
     def _place_panel(self) -> None:
         """把面板摆在球的旁边，靠近哪边贴哪边。"""
@@ -436,28 +592,27 @@ class AgentHubApp:
 
         bx, by = int(self.ball.x), int(self.ball.y)
         px = bx - PANEL_W - GAP
-        if px < 8:
+        if px < EDGE:
             px = bx + BALL + GAP
         py = by + BALL - PANEL_H
-        py = max(8, min(py, logical_h - PANEL_H - 8))
+        py = max(EDGE, min(py, logical_h - PANEL_H - EDGE))
         try:
             self.panel.move(px, py)
         except Exception:
             pass
 
     def _follow_ball(self) -> None:
-        """面板展开时让它实时跟着球走。
+        """面板展开时让它跟着球走（Windows 上另有主力方案，见下）。
 
-        为什么轮询：原生拖动是系统接管的（`begin_window_drag`），拖动期间
-        鼠标事件全被窗口挪走，前端一个 mousemove 都收不到，事件驱动没得做。
+        首选是挂消息钩子逐帧同步（`_attach_follow` / winapi.DragFollower）：
+        球每移动一帧，面板同帧跟上，没有间隔。这里是它的**兜底**——
+        钩子挂不上（拿不到原生句柄 / 非 Windows 平台）时才真正干活：
 
-        为什么不走 pywebview 的 move()/x/y：跨线程调用要经 WinForms 消息队列
-        排队，一次几十毫秒，跟着拖一顿一顿。Windows 后端有直连 Win32 的快速
-        通道（`window_pos`/`place_window`，物理像素，见 winapi 注释），按
-        显示刷新的节奏轮询；拿不到快速通道的平台退回 150ms 的慢速轮询。
+            快速通道    Win32 直读直写（物理像素），16ms 一轮
+            慢速退路    pywebview 的逻辑坐标，150ms 一轮（跨线程排队太慢）
 
-        工作区和 DPI 系数在循环外取一次：拖动过程中它们不会变，每轮重查
-        纯属浪费（DPI 变更极罕见，重启一下程序就同步了）。
+        为什么只能轮询而不能靠鼠标事件：原生拖动是系统接管的，拖动期间鼠标
+        事件全被窗口挪走，前端一个 mousemove 都收不到。
         """
         backend = self.runtime.backend
         scale = max(1.0, float(backend.screen_scale() or 1.0))
@@ -465,14 +620,30 @@ class AgentHubApp:
         panel_w_p = int(PANEL_W * scale)
         panel_h_p = int(PANEL_H * scale)
         gap_p = int(GAP * scale)
-        margin_p = int(8 * scale)
+        margin_p = int(EDGE * scale)
         work = backend.work_area()      # (l, t, r, b) 物理像素；拿不到就不做边界收缩
 
         last_ball = None
         while not self._stop.is_set():
             if not self._panel_shown or self.ball is None or self.panel is None:
                 last_ball = None
+                self._follow_tries = 0
                 self._stop.wait(0.15)
+                continue
+
+            # 还没挂上钩子就再试（原生对象就绪得比面板显示晚，启动时尤其明显）
+            if not self._follower_on and self._follow_tries < FOLLOW_TRIES:
+                self._follow_tries += 1
+                self._attach_follow()
+
+            # 钩子已经装好：逐帧同步由它负责。这里留一个低频纠偏，
+            # 覆盖「消息没到」的漏网情况（比如窗口被非拖动的方式挪动）。
+            if self._follower_on:
+                ball_pos = backend.window_pos(getattr(self.ball, "native", None))
+                if ball_pos is not None and ball_pos != last_ball:
+                    backend.sync_follow()
+                    last_ball = ball_pos
+                self._stop.wait(0.25)
                 continue
 
             # ---- 快速通道：Win32 直读直写 ----

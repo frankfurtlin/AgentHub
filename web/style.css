@@ -42,14 +42,20 @@ body[data-view="ball"].is-dragging { cursor: grabbing; }
   transform: translateZ(0);
 }
 
+/* ⚠️ 这里**不能**加 drop-shadow。
+   窗口只有 76px，圆的半径 35.5px，四角离圆心 53.7px——也就是说球外只剩
+   2.5px 余地。任何模糊半径超过 2px 的投影都会漫到窗口四角，然后被窗口边缘
+   硬裁成一块四四方方的灰（深色桌面上看不出来，白色桌面上一眼就看见）。
+   实测：`drop-shadow(0 10px 26px rgba(0,0,0,.14))` 会让四角比背景暗约 4.5%
+   （白底 #F7F7F7 → #F3F3F3，深底 #181825 → #171724，比例完全一致）。
+   轮廓靠 .ball__ring 那圈描边来交代，够用了。
+   真要投影，得先给窗口留出至少 15px 透明边，而透明区照样吃鼠标事件，
+   代价是球周围多一圈点不动的死区——不值得。 */
 .ball__art {
   position: relative;
   width: 100%;
   height: 100%;
   display: block;
-  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .18))
-          drop-shadow(0 10px 26px rgba(0, 0, 0, .14));
-  transition: filter var(--dur) var(--ease);
 }
 
 /* 毛色渐变的三个 stop。颜色只能从这里给：<stop> 不认 stop-color="var(...)"，
