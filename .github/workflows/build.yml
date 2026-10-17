@@ -20,6 +20,13 @@ on:
 permissions:
   contents: write
 
+# 连续推送时，新的运行把旧的那个取消掉。
+# 这一条不是锦上添花：runner 排队卡住（比如指到了一个已下线的镜像标签）时，
+# 旧运行会挂 45 分钟才被服务端丢弃，期间白占着队列。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 # 脚本的输出、日志、测试断言里都有中文。Windows runner 的默认编码不是 UTF-8，
 # 不设这个的话 print 中文会抛 UnicodeEncodeError——报错信息跟编码毫无关系，
 # 极难排查（第一次跑就踩了：macOS 全绿，只有 Windows 挂在打包步骤）。
@@ -31,16 +38,25 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    # Intel Mac 那个包是「有最好」，不该拖住发布：
+    # 它跑不通（或 runner 排队排到超时）时，其余两个包照常发。
+    continue-on-error: ${{ matrix.required == false }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
             name: AgentHub-windows-x64
+            required: true
           - os: macos-latest
             name: AgentHub-macos-arm64
-          - os: macos-13
+            required: true
+          # ⚠️ 别写 macos-13：GitHub 已经把 macOS 13 的镜像下线了，
+          # 用它会一直停在 queued，45 分钟后整个运行被丢弃。
+          # 现在 Intel Mac 的标准镜像标签是 macos-15-intel。
+          - os: macos-15-intel
             name: AgentHub-macos-x64
+            required: false
 
     steps:
       - uses: actions/checkout@v4
@@ -110,8 +126,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release delete latest --yes --cleanup-tag
-          # 极端情况下 gh 的 --cleanup-tag 没生效（tag 被保护规则挡住之类），
+          # 第一次发布时 latest 还不存在，gh 会返回非零；
+          # run 步骤是 bash -e，不兜住的话这里直接失败。
+          gh release delete latest --yes --cleanup-tag || true
+          # 极端情况下 --cleanup-tag 没生效（tag 被保护规则挡住之类），
           # 这里再兜一次，否则下一步 create 会因为 tag 已存在而失败。
           gh api -X DELETE "repos/$GH_REPO/git/refs/tags/latest" || true
 
@@ -120,6 +138,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # 三个包全挂时 dist 是空的，这时候不该硬发一个空 release
+          if ! ls dist/*.zip >/dev/null 2>&1; then
+            echo "没有产物，跳过发布"
+            exit 0
+          fi
+          echo "将发布："
+          ls -lh dist/*.zip
           gh release create latest \
             --title "AgentHub 最新构建" \
             --notes "由 \`$GITHUB_REF\` @ \`${GITHUB_SHA::7}\` 自动构建 $(date -u +'%Y-%m-%d %H:%M UTC')" \
