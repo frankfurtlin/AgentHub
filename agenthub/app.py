@@ -31,18 +31,14 @@ from .runtime import Runtime
 
 # ---------------------------------------------------------------- 尺寸与间距
 
-def _panel_height() -> int:
-    """面板高度跟着纳管的工具数量走。
-
-    492 是四张卡时的设计高度；每多一张卡加 72（卡高 64 + 卡间距 8，
-    与 web/style.css 的 .card / .cards gap 对应）。面板里的卡片列表
-    本身可滚动，这里算多了会有几像素空隙、算少了滚动条兜底，都不致命。
-    """
-    return 492 + max(0, len(AGENTS) - 4) * 72
-
 BALL = 76          # 悬浮球直径
 PANEL_W = 344      # 面板宽
-PANEL_H = _panel_height()      # 面板高
+# 面板高度**不写死**：前端每次渲染完把内容实际需要的高度报上来
+# （web/app.js 的 syncPanelHeight → Bridge.resize_panel），这里只负责夹紧。
+# 下面这个只是第一次打开面板时用的默认值，拿到真实高度后会被配置里的记住值取代。
+PANEL_H_DEFAULT = 520
+PANEL_H_MIN = 220  # 再小连头部 + 一张卡都放不下
+PANEL_H_MAX = 900  # 再大就该滚动了（还有一道按屏幕高度收的保险）
 MARGIN = 24        # 球离屏幕边缘的默认距离
 GAP = 12           # 面板与球之间的间隙
 EDGE = 8           # 面板离屏幕边缘的最小留白
@@ -118,6 +114,10 @@ class Bridge:
     def toggle_panel(self) -> bool:
         return self._app.toggle_panel()
 
+    def resize_panel(self, height: int) -> bool:
+        """前端量完内容高度后调这里：把面板窗改到刚好的高。"""
+        return self._app.resize_panel(int(height))
+
     def hide_panel(self) -> None:
         self._app.hide_panel()
 
@@ -167,6 +167,13 @@ class AgentHubApp:
         self._tray_icon = None
         self._tray_text = ""
         self._transparency_done = False
+        # 面板当前高度。首次以内置默认值开窗，前端渲染完把真实需要的高度报上来
+        # （见 resize_panel）；记住在配置里，下次开面板就不跳了。
+        try:
+            saved_h = int(self.config.get("panelHeight") or 0)
+        except (TypeError, ValueError):
+            saved_h = 0
+        self._panel_h = saved_h if PANEL_H_MIN <= saved_h <= PANEL_H_MAX else PANEL_H_DEFAULT
 
     # ---------------- 窗口
 
@@ -236,7 +243,8 @@ class AgentHubApp:
         )
         self.panel = webview.create_window(
             "AgentHub", _page("panel"),
-            width=PANEL_W, height=PANEL_H, min_size=(PANEL_W, PANEL_H), x=x, y=y,
+            width=PANEL_W, height=self._panel_h, min_size=(PANEL_W, PANEL_H_MIN),
+            x=x, y=y,
             frameless=True, transparent=True, on_top=True,
             resizable=False, shadow=False, hidden=True,
             js_api=self.bridge,
@@ -550,7 +558,7 @@ class AgentHubApp:
         try:
             ok = backend.attach_follow(
                 native_ball, native_panel,
-                (BALL, PANEL_W, PANEL_H, GAP, EDGE),
+                (BALL, PANEL_W, self._panel_h, GAP, EDGE),
             )
             if ok:
                 backend.sync_follow()       # 先对齐一次，不等下一次 WM_MOVE
@@ -572,13 +580,43 @@ class AgentHubApp:
             _log("摘拖动跟随失败：%r" % exc)
         self._follower_on = False
 
+    def resize_panel(self, height: int) -> bool:
+        """把面板窗改到指定高度（前端量出来的内容高度）。
+
+        调用方是前端（每次渲染完量一遍），所以这里要注意两点：
+
+        1. **面板没显示时不要改窗口尺寸**——`resize()` 的 flag 带 SWP_SHOWWINDOW，
+           会把窗口显示出来，等于凭空弹一次面板；
+        2. 改完要重新摆位，否则底部会脱开球（面板是底边对齐球的）。
+        """
+        if self.panel is None:
+            return False
+        ceiling = PANEL_H_MAX
+        size = self._logical_screen()
+        if size is not None:
+            ceiling = min(ceiling, max(PANEL_H_MIN, size[1] - EDGE * 2))
+        target = max(PANEL_H_MIN, min(int(ceiling), int(height)))
+        if abs(target - self._panel_h) < 2:
+            return False
+        self._panel_h = target
+        if not self._panel_shown:
+            return False                    # 记下高度就行，开面板时 _place_panel 会用
+        try:
+            self.panel.resize(PANEL_W, target)
+        except Exception as exc:
+            _log("调整面板高度失败：%r" % exc)
+            return False
+        self._move_panel()
+        self.config.set("panelHeight", target, save=True)
+        return True
+
     def _place_panel(self) -> None:
         """把面板摆在球的旁边，靠近哪边贴哪边。"""
         # 尺寸在这里校正——见 _settle_windows() 的说明：resize 会把窗口显示
         # 出来，而这一步本来就紧接着 show()，顺手做掉最省事。放在最前面，
         # 免得后面因为拿不到屏幕尺寸提前 return 就漏掉了。
         try:
-            self.panel.resize(PANEL_W, PANEL_H)
+            self.panel.resize(PANEL_W, self._panel_h)
         except Exception as exc:
             _log("校正面板尺寸失败：%r" % exc)
         self._move_panel()
@@ -594,8 +632,8 @@ class AgentHubApp:
         px = bx - PANEL_W - GAP
         if px < EDGE:
             px = bx + BALL + GAP
-        py = by + BALL - PANEL_H
-        py = max(EDGE, min(py, logical_h - PANEL_H - EDGE))
+        py = by + BALL - self._panel_h
+        py = max(EDGE, min(py, logical_h - self._panel_h - EDGE))
         try:
             self.panel.move(px, py)
         except Exception:
@@ -618,7 +656,6 @@ class AgentHubApp:
         scale = max(1.0, float(backend.screen_scale() or 1.0))
         ball_p = int(BALL * scale)
         panel_w_p = int(PANEL_W * scale)
-        panel_h_p = int(PANEL_H * scale)
         gap_p = int(GAP * scale)
         margin_p = int(EDGE * scale)
         work = backend.work_area()      # (l, t, r, b) 物理像素；拿不到就不做边界收缩
@@ -647,6 +684,8 @@ class AgentHubApp:
                 continue
 
             # ---- 快速通道：Win32 直读直写 ----
+            # 高度每轮重读：面板会随内容变高（见 resize_panel）
+            panel_h_p = int(self._panel_h * scale)
             native_ball = getattr(self.ball, "native", None)
             ball_pos = backend.window_pos(native_ball) if native_ball is not None else None
             if ball_pos is not None:

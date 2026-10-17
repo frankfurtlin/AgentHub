@@ -10,16 +10,19 @@ AgentHub 常驻桌面角落，谁在等你就亮谁，点一下直接切到那�
 
 ```
                 ┌──────────────────────────────┐
-   悬浮球        │  AgentHub          4/4 运行中  │  ← 点球展开
+   悬浮球        │  AgentHub          3/7 运行中  │  ← 点球展开
    （贴边）      │ ──────────────────────────── │
-    ●●●●        │  [C] CodeBuddy CN  空闲中  › │
-                │  [T] Trae CN       输出中  › │  ← 点卡片切窗口
-                │  [Q] Qoder CN   待审批 · 2 › │
-                │  [W] WorkBuddy     空闲中  › │
+    ●●●●●●●      │  [W] WorkBuddy   有新结果  › │  ← 一个点一个工具
+                │  [D] DeepSeek   空闲中·托盘 › │     颜色随状态变
+                │  [C] CodeBuddy     输出中  › │
+                │  [T] Trae CN       未启动  › │  ← 点卡片切窗口
+                │  [Q] Qoder CN      未启动  › │
                 │ ──────────────────────────── │
-                │  有 2 个任务在等你确认         │
+                │  有 1 个工具出了新结果         │
                 └──────────────────────────────┘
 ```
+
+只列**这台机器上装了**的工具，高度也跟着内容自动伸缩。
 
 ## 为什么值得用
 
@@ -50,6 +53,8 @@ WebView2 Runtime 的好处是**不用跟着安装包发**：它是系统的，�
 |---|---|
 | 悬浮球 + 状态面板 | ✅ 可用（自绘水豚、亮/暗双主题、拖动、贴边记忆） |
 | 状态判断 | ✅ 两条通道：系统通知 + 界面探针（UIA） |
+| 只展示已装的工具 | ✅ 四路检测（注册表 / 快捷方式 / MSIX / exe），5 分钟缓存 |
+| 面板高度 | ✅ 跟着卡片数量自适应（220–900，超出才滚） |
 | 点卡片切窗口 | ✅ 支持从最小化 / 托盘唤起 |
 | 提示音 + 告警边沿 | ✅ 只在「从不在等 → 在等」时响一次 |
 | 开机自启 | ✅ `python tools/install_startup.py on` |
@@ -81,12 +86,15 @@ python -m agenthub --once
 
 ```
 平台：windows  能力：{'platform': 'windows', 'uiProbe': True, 'notifications': True, 'icons': True}
-扫描耗时 13ms
+扫描耗时 418ms
+WorkBuddy      有新结果     cpu=  0.0%    任务已完成
+DeepSeek Harness 空闲中      cpu=  0.0% · 托盘
 CodeBuddy CN   空闲中      cpu=  0.0%
-Trae CN        空闲中      cpu=  0.0% · 最小化
-Qoder CN       空闲中      cpu=  0.0% · 最小化
-WorkBuddy      待审批      cpu=  0.0%    任务等待确认，请处理
-合计：{'running': 4, 'waiting': 1, 'unread': 0}
+Trae CN        未启动      cpu=  0.0%
+Qoder CN       未启动      cpu=  0.0%
+Claude         未启动      cpu=  0.0%
+Codex          未启动      cpu=  0.0%
+合计：{'running': 3, 'waiting': 0, 'unread': 1}
 ```
 
 正常启动：
@@ -118,15 +126,25 @@ python -m agenthub
 
 ## 支持的工具
 
-| 工具 | 进程名 | 判断方式 |
+| 工具 | 判断方式 | 怎么认出来它装了 |
 |---|---|---|
-| CodeBuddy CN | `CodeBuddy CN.exe` | 界面探针 |
-| Trae CN | `Trae CN.exe` | 通知 + CPU |
-| Qoder CN | `Qoder CN.exe` | 界面探针 |
-| WorkBuddy | `WorkBuddy.exe` | 通知 |
+| CodeBuddy CN | 界面探针 | 注册表卸载项 / 开始菜单快捷方式 |
+| Trae CN | 通知 + CPU | 同上 |
+| Qoder CN | 界面探针 | 同上 |
+| WorkBuddy | 通知 | 同上 |
+| Claude | 通知 | 商店版（MSIX）走 `AppModel\Repository\Packages`，装的是哪一版都能认出来 |
+| DeepSeek Harness | 通知 | 注册表 + 托盘 |
+| Codex | 通知 | CLI，没有安装程序，只能探测 `codex.exe` 路径 |
+
+**只展示这台机器上真的装了的。** 七家里装三家，面板就只出现三张卡，球上也只有三个点。
+判断是四路取并集（注册表卸载项、开始菜单 `.lnk`、MSIX 包名、exe 探路），
+见 [`agenthub/host/windows/installed.py`](agenthub/host/windows/installed.py)。
+正在运行的进程一律算「装了」——哪怕没留下任何安装痕迹（绿色版、CLI）。
+检测结果缓存 5 分钟，中途装了新工具不用重启。
 
 要加一个工具，只需在 [`agenthub/models.py`](agenthub/models.py) 的 `AGENTS` 里加一条：
-进程名用来找它，品牌色用来画图标底衬，`ui_probe=True` 表示额外用界面探针读审批状态。
+进程名用来找它，品牌色用来画图标底衬，`ui_probe=True` 表示额外用界面探针读审批状态，
+`install_hints` 给小写关键词（能出现在安装名 / 快捷方式名里的片段）用于装机检测。
 
 ## 结构
 
@@ -137,10 +155,10 @@ agenthub/
   app.py          pywebview 外壳：两个无边框透明窗口 + 暴露给前端的桥
   webview_env.py  启动 WebView 前的环境准备（有一处不是可选项，见 docs）
   config.py       配置读写
-  host/
+    host/
     base.py            平台抽象层（Backend / UiProbeSession / WindowInfo）
     windows/           Win32 实现：winapi（纯 ctypes）、uia（UI Automation 探针）、
-                       icons（从 exe 抠图标）、notify（读通知库）
+                       icons（从 exe 抠图标）、notify（读通知库）、installed（装机检测）
     macos/             macOS 实现（待写）
 web/
   index.html      两个视图的模板（悬浮球 / 状态面板）

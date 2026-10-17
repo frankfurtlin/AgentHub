@@ -19,7 +19,7 @@ import subprocess
 import time
 
 from ..base import Backend, UiProbeSession, WindowInfo
-from . import icons, uia, winapi
+from . import icons, installed, uia, winapi
 from .notify import WinNotificationSource
 
 
@@ -157,6 +157,13 @@ class WindowsBackend(Backend):
         if not hwnd:
             return False
         return winapi.start_window_drag(hwnd)
+
+    def installed_apps(self) -> list[str] | None:
+        """装了哪些应用（见 host/windows/installed.py）。"""
+        try:
+            return installed.installed_apps()
+        except Exception:
+            return None
 
     def make_tool_window(self, native) -> bool:
         """让这个窗口从任务栏消失（改成工具窗，见 winapi.set_tool_window）。

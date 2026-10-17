@@ -205,6 +205,15 @@ class Backend(ABC):
         """
         return False
 
+    def installed_apps(self) -> list[str] | None:
+        """这台机器上装了哪些应用（名字清单）。返回 None 表示平台不支持检测。
+
+        面板只显示「装了 + 正在跑」的工具，免得列一堆永远灰着的卡片。
+        名字怎么来随平台：Windows 上取卸载项、开始菜单、MSIX 包名和几个
+        exe 探路的并集，见 host/windows/installed.py。
+        """
+        return None
+
     def make_tool_window(self, native) -> bool:
         """把窗口从任务栏里摘掉。不支持时返回 False（比如平台另有做法）。
 

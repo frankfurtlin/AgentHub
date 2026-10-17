@@ -413,18 +413,28 @@ class DragFollower:
     # ---------------- 摆位
 
     def follow(self) -> None:
-        """按源窗口当前的位置摆好目标窗口（消息钩子里直接调，也供外部纠偏）。"""
+        """按源窗口当前的位置摆好目标窗口（消息钩子里直接调，也供外部纠偏）。
+
+        目标窗口的**实际尺寸每帧现读**，不用挂载时传进来的那份：面板高度会随
+        内容变（app.resize_panel），写死的话每次改高度都得重挂钩子，还容易漏。
+        """
         rect = RECT()
         if not user32.GetWindowRect(self.source, ctypes.byref(rect)):
             return
+        panel_w, panel_h = self.panel_w, self.panel_h
+        target = RECT()
+        if user32.GetWindowRect(self.target, ctypes.byref(target)):
+            panel_w = max(1, int(target.right - target.left))
+            panel_h = max(1, int(target.bottom - target.top))
+
         bx, by = int(rect.left), int(rect.top)
-        px = bx - self.panel_w - self.gap
+        px = bx - panel_w - self.gap
         if px < self.margin:               # 左边放不下就换到源窗口右边
             px = bx + self.ball + self.gap
-        py = by + self.ball - self.panel_h
+        py = by + self.ball - panel_h
         if self.work is not None:
-            px = max(self.margin, min(px, self.work[2] - self.panel_w - self.margin))
-            py = max(self.margin, min(py, self.work[3] - self.panel_h - self.margin))
+            px = max(self.margin, min(px, self.work[2] - panel_w - self.margin))
+            py = max(self.margin, min(py, self.work[3] - panel_h - self.margin))
         move_window_phys(self.target, px, py)
 
     # ---------------- 消息钩子

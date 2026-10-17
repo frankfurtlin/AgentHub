@@ -45,6 +45,7 @@
     mounted: false,   // 视图 DOM 挂好了没
     themeDone: false, // 主题偏好取到了没
     dataDone: false,  // 首份快照取到了没
+    panelHeight: 0,   // 上一次报给 Python 的面板高度（防抖用）
     nodes: {}         // 挂载后的 DOM 引用
   };
 
@@ -90,10 +91,23 @@
 
   // ---------------------------------------------------------------- 悬浮球
 
-/* 四个状态点横排在水豚下巴底下，一个工具一个点，颜色随状态变。
-   原来是 2×2 点阵摆在球心，现在球心让给脸了，整体下移成一排。 */
-var DOT_POS = [[26, 61.5], [34, 61.5], [42, 61.5], [50, 61.5]];
+/* 状态点横排在水豚下巴底下，一个工具一个点，颜色随状态变。
+   点数跟着「这台机器实际装了几个工具」走，所以位置不能写死成一张表：
+   按点数反推间距和半径，整排居中在 x=38，总宽封顶 44（球宽 76，
+   两边各留 16，不会被窗口边缘裁到）。 */
+var DOT_Y = 61.5;
+var DOT_CX = 38;
+var DOT_MAX_W = 36;
+var DOT_GAP_MAX = 8;
 var DOT_R = 2.9;
+var DOT_SLACK = 1.8;  // 点与点之间至少留这么宽的缝，太挤就缩半径
+
+function dotLayout(count) {
+  if (count <= 1) { return { gap: 0, r: DOT_R }; }
+  var gap = Math.min(DOT_GAP_MAX, DOT_MAX_W / (count - 1));
+  var r = Math.min(DOT_R, Math.max(1.8, (gap - DOT_SLACK) / 2));
+  return { gap: gap, r: r };
+}
 
 function mountBall() {
     var node = document.getElementById('tpl-ball').content.firstElementChild.cloneNode(true);
@@ -113,10 +127,15 @@ function mountBall() {
     // 状态点
     var dots = node.querySelector('.ball__dots');
     dots.innerHTML = '';
+    var layout = dotLayout(agents.length);
+    var startX = DOT_CX - (agents.length - 1) * layout.gap / 2;
     agents.forEach(function (agent, index) {
-      var pos = DOT_POS[index] || [38, 68];
+      var cx = startX + index * layout.gap;
       dots.appendChild(svgEl('circle', {
-        cx: pos[0], cy: pos[1], r: DOT_R, fill: statusColor(agent)
+        cx: Math.round(cx * 100) / 100,
+        cy: DOT_Y,
+        r: Math.round(layout.r * 100) / 100,
+        fill: statusColor(agent)
       }));
     });
 
@@ -266,6 +285,45 @@ function mountBall() {
     });
 
     renderFoot(agents, totals);
+    syncPanelHeight();
+  }
+
+  /* 让窗口高度跟着内容走。
+     窗口是外部（Python）给的尺寸，页面自己撑不动窗口，所以要量完报上去：
+     头部 + 卡片列表的自然高度 + 脚部 + 两条边框。
+     `#cards` 是 flex:1 + overflow:auto，它的 offsetHeight 是「可用空间」而不是
+     内容高度，所以得把每张卡的高度累加（含 gap 与 padding）——直接读
+     scrollHeight 在内容比窗口矮时拿不到真实值。 */
+  function syncPanelHeight() {
+    var panel = state.nodes.panel;
+    var cards = state.nodes.cards;
+    var foot = state.nodes.foot;
+    if (!panel || !cards || !foot) { return; }
+
+    var head = panel.querySelector('.panel__head');
+    var style = window.getComputedStyle(cards);
+    var listHeight = 0;
+    for (var i = 0; i < cards.children.length; i += 1) {
+      listHeight += cards.children[i].getBoundingClientRect().height;
+    }
+    var gap = parseFloat(style.rowGap) || 0;
+    listHeight += gap * Math.max(0, cards.children.length - 1);
+    listHeight += (parseFloat(style.paddingTop) || 0)
+                + (parseFloat(style.paddingBottom) || 0);
+
+    var total = Math.ceil(
+      (head ? head.getBoundingClientRect().height : 0)
+      + listHeight
+      + foot.getBoundingClientRect().height
+      + 2                                    /* 上下边框各 1px */
+    );
+
+    if (Math.abs(total - state.panelHeight) < 2) { return; }
+    state.panelHeight = total;
+    var bridge = api();
+    if (bridge && typeof bridge.resize_panel === 'function') {
+      bridge.resize_panel(total);
+    }
   }
 
   function buildCard(agent) {
@@ -350,7 +408,7 @@ function mountBall() {
     }
 
     var running = agents.filter(function (agent) { return agent.running; }).length;
-    text.textContent = running ? '都没有在等你' : '四个工具都没启动';
+    text.textContent = running ? '都没有在等你' : '纳管的工具都没启动';
     foot.dataset.tone = 'ok';
   }
 

@@ -20,7 +20,8 @@ from dataclasses import replace
 
 from .config import Config
 from .host import Backend, get_backend
-from .models import AGENTS, KIND_APPROVAL, KIND_DONE, AgentState, Notice, AgentDef
+from .models import (AGENTS, KIND_APPROVAL, KIND_DONE, AgentState, AgentDef,
+                     Notice, match_installed)
 
 
 # ---------------------------------------------------------------- CPU 活跃度
@@ -202,6 +203,33 @@ class Runtime:
         self._primed = False
         self._first_scan = True
         self._on_alert = None        # fn(level: int, names: list[str])
+        # 已安装应用的 key 集合；None = 这台平台查不到，那就不过滤（全显示）
+        self._installed: set[str] | None = None
+        self._installed_at = 0.0
+
+    # ---------------- 装机检测
+
+    #: 重扫间隔。装完新工具不用重启程序，最多等这么久就会出现在面板里
+    INSTALLED_TTL = 300.0
+
+    def _installed_keys(self) -> set[str] | None:
+        """这台机器上装了哪些工具。None 表示查不到，调用方就别过滤。"""
+        now = time.monotonic()
+        if self._installed is not None and (now - self._installed_at) < self.INSTALLED_TTL:
+            return self._installed or None
+        try:
+            names = self.backend.installed_apps()
+        except Exception:
+            names = None
+        self._installed_at = now
+        if names is None:
+            self._installed = None
+            return None
+        keys = match_installed(names)
+        # 一个都没匹配上，多半是检测本身出了问题（注册表读不到之类）。
+        # 这时候宁可全显示，也别让面板空成一片。
+        self._installed = keys or None
+        return self._installed
 
     # ---------------- 生命周期
 
@@ -277,7 +305,18 @@ class Runtime:
         targets: dict[str, int] = {}
         active: set[str] = set()
 
+        installed = self._installed_keys()
+
         for agent in AGENTS:
+            pids = groups.get(agent.key) or []
+            # 没装、也没在跑的工具直接不纳管——面板里不该有一排永远灰着的卡片。
+            # 但如果它正在跑（刚装的、或者装机检测漏了），一律当它装了。
+            if pids:
+                if installed is not None:
+                    installed.add(agent.key)
+            elif installed is not None and agent.key not in installed:
+                continue
+
             state = AgentState(definition=agent)
             old = self.states.get(agent.key)
             if old:
@@ -287,7 +326,6 @@ class Runtime:
                 state.notice = old.notice
                 state.orders = list(old.orders)
 
-            pids = groups.get(agent.key) or []
             state.cpu = cpu.get(agent.key, 0.0)
             state.busy = self.cpu.busy(agent.key)
             if pids:
@@ -354,6 +392,10 @@ class Runtime:
                 state.approvals.append(notice)
                 state.notice = notice
             elif notice.kind == KIND_DONE:
+                # 任务都跑完了，之前那些「等你确认」自然作废——不清的话卡片会
+                # 一直挂着「待审批」，点过去却发现没东西可批（实测踩到：审批通知
+                # 3 分钟前、完成通知 2.4 分钟前，卡片还显示待审批）。
+                state.approvals.clear()
                 state.unread += 1
                 state.notice = notice
             else:

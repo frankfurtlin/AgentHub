@@ -38,6 +38,10 @@ class AgentDef:
     fill_dark: str = ""                 # 深色主题下的底衬
     stroke_dark: str = ""               # 深色主题下的品牌色
     ui_probe: bool = False              # 是否额外用界面探针读审批状态
+    #: 判断「这个工具装没装」的关键字，拿去匹配系统里的应用名（注册表的
+    #: DisplayName、开始菜单快捷方式、MSIX 包名……）。全小写比较。
+    #: 留空表示不做装机检测：只要平台能查到应用列表就永远认为它已安装。
+    install_hints: tuple[str, ...] = ()
 
 
 AGENTS: tuple[AgentDef, ...] = (
@@ -55,6 +59,7 @@ AGENTS: tuple[AgentDef, ...] = (
         # 它只在窗口「不聚焦」时才发系统通知，而审批弹窗恰恰只在你看着窗口时出现。
         # 所以这里改用界面探针直接读。
         ui_probe=True,
+        install_hints=("codebuddy",),
     ),
     AgentDef(
         key="trae",
@@ -66,6 +71,7 @@ AGENTS: tuple[AgentDef, ...] = (
         glyph="T",
         fill_dark="#12314E",
         stroke_dark="#6FB6F5",
+        install_hints=("trae",),
     ),
     AgentDef(
         key="qoder",
@@ -78,6 +84,7 @@ AGENTS: tuple[AgentDef, ...] = (
         fill_dark="#2A2A55",
         stroke_dark="#A79CF5",
         ui_probe=True,   # 同 CodeBuddy：通知库里至今 0 条
+        install_hints=("qoder",),
     ),
     AgentDef(
         key="workbuddy",
@@ -89,6 +96,7 @@ AGENTS: tuple[AgentDef, ...] = (
         glyph="W",
         fill_dark="#26380F",
         stroke_dark="#A8D65A",
+        install_hints=("workbuddy",),
     ),
     # Claude Desktop（微软商店 MSIX 版）。运行时进程名是包内的 Claude.exe，
     # 开始菜单别名是 claude-desktop.exe，两个都收。通知来源标识是
@@ -104,6 +112,7 @@ AGENTS: tuple[AgentDef, ...] = (
         glyph="A",
         fill_dark="#3B241A",
         stroke_dark="#E89070",
+        install_hints=("claude",),
     ),
     # DeepSeek Harness（Electron 应用，本机装在 D:\dsh\）。
     # 有 agent 执行审批流，Electron 渲染面 UIA 读得到，开界面探针——
@@ -119,6 +128,7 @@ AGENTS: tuple[AgentDef, ...] = (
         fill_dark="#182452",
         stroke_dark="#8598FF",
         ui_probe=True,
+        install_hints=("deepseek", "harness", "dsh"),
     ),
     # Codex（OpenAI 的 CLI agent，本机在 %LOCALAPPDATA%\OpenAI\Codex\bin\）。
     # 注意它**没有自己的 GUI 窗口**——跑在 Windows Terminal / ConHost 里，
@@ -136,6 +146,7 @@ AGENTS: tuple[AgentDef, ...] = (
         glyph="X",
         fill_dark="#103529",
         stroke_dark="#4FD1A5",
+        install_hints=("codex", "openai"),
     ),
 )
 
@@ -210,6 +221,25 @@ def parse_toast(payload) -> tuple[str, str]:
     title = parts[0] if parts else ""
     body = parts[1] if len(parts) > 1 else ""
     return title, body
+
+
+def match_installed(app_names) -> set[str]:
+    """把系统里的应用名清单映射成「已安装的 agent key」。
+
+    只做包含匹配（都是小写）：注册表里叫 `CodeBuddy CN (User)`、快捷方式叫
+    `TraeCode CN`、MSIX 包叫 `Claude_1.5.0.0_x64__pzs8sxrjxfjjc`——名字后面
+    挂什么都可能，所以不要求全等。
+    """
+    low = [str(name).lower() for name in app_names if name]
+    keys: set[str] = set()
+    for agent in AGENTS:
+        if not agent.install_hints:
+            continue
+        for hint in agent.install_hints:
+            if any(hint in name for name in low):
+                keys.add(agent.key)
+                break
+    return keys
 
 
 def match_agent(primary_id: str) -> str | None:
