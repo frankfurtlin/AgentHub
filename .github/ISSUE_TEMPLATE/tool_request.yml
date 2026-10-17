@@ -1,0 +1,54 @@
+name: 纳管一个新工具
+description: 想让 AgentHub 也监控另一个 AI 编程助手
+labels: ["enhancement", "tool"]
+body:
+  - type: markdown
+    value: |
+      加一个工具的成本主要在**「怎么知道它在等你」**这件事实上——
+      进程名和品牌色只是几行配置。下面几项能填多少填多少，
+      不知道的留空，我来查。
+
+  - type: input
+    id: name
+    attributes:
+      label: 工具名
+      placeholder: "Cursor"
+    validations:
+      required: true
+
+  - type: input
+    id: process
+    attributes:
+      label: 进程名
+      description: 任务管理器里看到的可执行文件名，macOS 上不带后缀
+      placeholder: "Cursor.exe"
+    validations:
+      required: true
+
+  - type: input
+    id: path
+    attributes:
+      label: 装在哪
+      placeholder: "C:\\Users\\...\\AppData\\Local\\Programs\\cursor\\Cursor.exe"
+
+  - type: textarea
+    id: approval
+    attributes:
+      label: 它卡住的时候，界面上长什么样
+      description: |
+        触发一次审批（让它跑条危险命令），别点，把界面上出现的文字原样抄下来。
+        截图更好。这决定了界面探针的判据。
+
+  - type: textarea
+    id: notification
+    attributes:
+      label: 它发不发系统通知
+      description: |
+        跑完 / 需要确认的时候，Windows 通知中心（或 macOS 通知中心）有没有提示？
+        原样抄一下文案。有些工具只在窗口不聚焦时才发，这种也能用，但要知道。
+
+  - type: input
+    id: brand
+    attributes:
+      label: 品牌色
+      description: 图标底衬想用什么颜色（有官网 logo 的话给个链接也行）

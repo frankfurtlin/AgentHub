@@ -203,9 +203,13 @@ class Runtime:
         self._primed = False
         self._first_scan = True
         self._on_alert = None        # fn(level: int, names: list[str])
-        # 已安装应用的 key 集合；None = 这台平台查不到，那就不过滤（全显示）
+        # 已安装应用的 key 集合；「还没扫过」和「扫过但一个都没匹配上」是两回事，
+        # 所以扫没扫过要单独记一个标志，不能拿集合空不空来推断——集合空了
+        # 就重扫的话，一台什么 AI 工具都没装的机器会被每 1.5 秒扫一遍
+        # 注册表 + 开始菜单（几百个条目），白烧 CPU。
         self._installed: set[str] | None = None
         self._installed_at = 0.0
+        self._installed_scanned = False
 
     # ---------------- 装机检测
 
@@ -213,23 +217,28 @@ class Runtime:
     INSTALLED_TTL = 300.0
 
     def _installed_keys(self) -> set[str] | None:
-        """这台机器上装了哪些工具。None 表示查不到，调用方就别过滤。"""
+        """这台机器上装了哪些工具。返回 None 表示「别过滤」，全显示。
+
+        返回 None 有三种情况，都是同一个兜底：**区分不了就别自作聪明**。
+
+            · 平台不支持检测（`installed_apps()` 返回 None）
+            · 扫到了 0 个应用（可能是真没装，也可能是注册表读不到）
+            · 扫到不少应用，但一个 agent 都没匹配上（多半是检测挂了）
+
+        尤其第二种：它和「这台机器确实没装 AI 工具」在代码里长得一样，
+        而按后者严格过滤的话，面板会直接空成一片——比多显示几张灰卡糟得多。
+        """
         now = time.monotonic()
-        if self._installed is not None and (now - self._installed_at) < self.INSTALLED_TTL:
+        if self._installed_scanned and (now - self._installed_at) < self.INSTALLED_TTL:
             return self._installed or None
         try:
             names = self.backend.installed_apps()
         except Exception:
             names = None
         self._installed_at = now
-        if names is None:
-            self._installed = None
-            return None
-        keys = match_installed(names)
-        # 一个都没匹配上，多半是检测本身出了问题（注册表读不到之类）。
-        # 这时候宁可全显示，也别让面板空成一片。
-        self._installed = keys or None
-        return self._installed
+        self._installed_scanned = True
+        self._installed = None if names is None else match_installed(names)
+        return self._installed or None
 
     # ---------------- 生命周期
 

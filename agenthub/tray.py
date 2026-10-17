@@ -32,7 +32,7 @@ def icon_path() -> str:
         base = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
     else:
         base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base, "agenthub", "assets", ICON_FILE)
+    return os.path.join(base, "assets", ICON_FILE)
 
 
 def attach(app) -> bool:

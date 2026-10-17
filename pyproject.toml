@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agenthub"
-version = "0.2.10"
+version = "0.3.0"
 description = "悬浮球 + 状态面板：把本机几个 GUI 版 AI 编程助手的状态收进一个小窗口"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -22,11 +22,17 @@ classifiers = [
 dependencies = [
     "pywebview>=5.0",
     "psutil>=5.9",
+    # 代码里直接 `from System.Drawing import ...`（托盘图标、透明补丁），
+    # 这是对 pythonnet 的直接依赖。pywebview 也会把它带进来，但那是它的
+    # 依赖声明，不该是我们隐式的来源——写清楚，换版本时不容易被移除。
+    "pythonnet>=3.0; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
 # 打包用（开发环境不需要）
 build = ["pyinstaller>=6.0"]
+# 开发用：跑测试、检查代码风格
+dev = ["pytest>=7.0", "ruff>=0.6"]
 
 [project.urls]
 Homepage = "https://github.com/frankfurtlin/AgentHub"
@@ -37,3 +43,23 @@ agenthub = "agenthub.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["agenthub*"]
+
+# 注意：web/ 和 assets/ 不在包里，是**运行时按 sys._MEIPASS 找**的
+# （见 agenthub/app.py 的 web_dir()、agenthub/tray.py 的 icon_path()）。
+# 打包时由 tools/build.py 用 --add-data 带进去，不需要在这里声明。
+
+# ---------------------------------------------------------------- 工具配置
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# E501 关掉：这个项目的注释和文档字符串写得很密，硬折行反而更难读。
+# 其余保持默认（E 行尾/空白类、F 未使用/未定义）。
+ignore = ["E501"]

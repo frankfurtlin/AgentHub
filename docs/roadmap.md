@@ -80,32 +80,41 @@
 
 ## 四、分发
 
-还没开始做。想好的方案：
+✅ **已做**，见 [`packaging.md`](packaging.md)。
 
 ```
-PyInstaller --noconsole --onefile
+python tools/build.py --clean --zip
   入口         agenthub/__main__.py
-  需要打包     web/、agenthub/assets/（都是 --add-data）、LICENSE
-  要排除的     tkinter、numpy、PyQt、pytest（pywebview 会把一堆无关的依赖拖进来）
-  体积目标     Windows 上 15~25 MB（不带 Qt、不带 Chromium）
+  需要打包     web/、assets/（都是 --add-data）、LICENSE
+  要排除的     tkinter、numpy、PyQt、pytest、PIL、win32com
+  实测体积     12 MB（Windows x64，onedir）
 ```
 
-三个要注意的点：
+三个注意点：
 
-1. **WebView2 Runtime 不能打进去**，它是系统的。安装包要做检测：没有就引导去装
-   （微软提供 bootstrapper，也可以静默装 Evergreen Bootstrapper）。
-2. **`--onefile` 每次启动都要解压到临时目录**，会再慢 1~2 秒。要快就用 `--onedir`
-   配一个 NSIS / Inno Setup 安装包。
-3. **打包后 `sys.executable` 是 exe 自己**，`tools/install_startup.py` 已经优先找
-   `dist/AgentHub.exe`，所以打包后开机自启不用改。
+1. **WebView2 Runtime 不能打进去**，它是系统的。Win11 自带；Win10 一般随 Edge
+   装好了；没有的话引导去装（微软提供 Evergreen Bootstrapper，支持静默）。
+2. 默认 **`--onedir`**，因为 `--onefile` 每次启动都要解压几百个文件到临时目录，
+   慢 1~2 秒——常驻挂件的启动速度比少一个文件重要。
+3. **打包后 `__main__.py` 不能用相对导入**：PyInstaller 把入口脚本当顶层模块执行，
+   没有包上下文。已改成 try/except 双分支。
 
-macOS 上同样用 PyInstaller，产出 `.app`；`host/macos` 落地后再做，
-到时候还需要处理签名与「辅助功能」权限引导。
+GitHub Actions（`.github/workflows/build.yml`）在每次 push 到 main 时自动构建
+Windows x64、macOS arm64、macOS x64 三包，并覆盖发布到固定的 `latest` release。
+
+剩下的两件事：
+
+- **macOS 签名与公证**：现在 unsigned，别人下载后第一次启动要右键「打开」。
+  要干净分发得走 Apple Developer。
+- **安装包**：现在是 zip。Windows 可以套 NSIS / Inno Setup 做安装向导 +
+  开机自启勾选项；macOS 做 dmg。
 
 ---
 
 ## 五、如果只挑三件事做
 
-1. **打包**（能让别人真的用上）
+~~1. 打包（能让别人真的用上）~~ —— ✅ 0.2.10 已完成
+
+1. **macOS 后端**（现在 Mac 包能构建、能启动，但状态读不出来）
 2. **右键菜单 + 全部已读**（每天都要用到的操作现在缺一半）
 3. **自定义工具配置**（纳管新工具不该改代码）

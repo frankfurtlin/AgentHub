@@ -1,0 +1,19 @@
+# 编辑器统一配置。装了 EditorConfig 插件的编辑器会自动读它。
+# 项目同时在 Windows / macOS 上开发，行尾统一 LF（.gitattributes 也是这么定的），
+# 缩进统一 4 空格，免得行尾和空格混进 diff。
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{yml,yaml,json,toml}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false

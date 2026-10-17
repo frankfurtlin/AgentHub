@@ -768,12 +768,48 @@ class AgentHubApp:
             return False
 
 
-def _log(message: str) -> None:
-    """诊断输出。pythonw 下没有控制台，但 print 到已关闭的标准流是安全的。"""
+_LOG_PATH: str | None = None
+
+
+def _log_path() -> str:
+    """打包后诊断输出落到哪里。
+
+    `--windowed` 打出来的 exe 没有控制台，`print` 到已关闭的标准流不会抛异常，
+    但也什么都看不见——所以在打包形态下额外写一份到配置文件旁边，
+    CI 的冒烟测试靠它判断「产物是不是真的能跑」。
+    """
+    global _LOG_PATH
+    if _LOG_PATH is None:
+        from .host import get_backend
+        try:
+            folder = get_backend().config_dir()
+        except Exception:
+            folder = os.path.join(os.path.expanduser("~"), "AgentHub")
+        _LOG_PATH = os.path.join(folder, "agenthub.log")
+    return _LOG_PATH
+
+
+def _emit(line: str) -> None:
+    """输出一行诊断：终端（如果有）+ 日志文件（打包时）。"""
     try:
-        print("[AgentHub] %s" % message, flush=True)
+        print(line, flush=True)
     except Exception:
         pass
+    if getattr(sys, "frozen", False):
+        try:
+            path = _log_path()
+            folder = os.path.dirname(path)
+            if folder:
+                os.makedirs(folder, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+        except Exception:
+            pass
+
+
+def _log(message: str) -> None:
+    """诊断输出。pythonw / --windowed 下没有控制台，print 到已关闭的标准流是安全的。"""
+    _emit("[AgentHub] %s" % message)
 
 
 # ---------------------------------------------------------------- 命令行
@@ -797,21 +833,31 @@ def main(argv=None) -> int:
 
 
 def _print_once() -> int:
-    """诊断用：一轮扫描的结果直接打出来。"""
-    runtime = Runtime()
-    print("平台：%s  能力：%s" % (runtime.backend.name, runtime.backend.capabilities()))
-    started = time.time()
-    snapshot = runtime.refresh()
-    print("扫描耗时 %.0fms" % ((time.time() - started) * 1000))
-    for agent in snapshot["agents"]:
-        line = "%-14s %-8s cpu=%5.1f%%" % (agent["name"], agent["status"], agent["cpu"])
-        if agent["hint"]:
-            line += " · %s" % agent["hint"]
-        if agent["detail"]:
-            line += "    %s" % agent["detail"]
-        print(line)
-    print("合计：%s" % snapshot["totals"])
-    return 0
+    """诊断用：一轮扫描的结果直接打出来。
+
+    打包成 `--windowed` 之后没有控制台，所以这里一律走 `_emit`——
+    CI 的冒烟测试读的是它写下的日志文件，不是标准输出。
+    """
+    try:
+        runtime = Runtime()
+        _emit("平台：%s  能力：%s" % (runtime.backend.name,
+                                  runtime.backend.capabilities()))
+        started = time.time()
+        snapshot = runtime.refresh()
+        _emit("扫描耗时 %.0fms" % ((time.time() - started) * 1000))
+        for agent in snapshot["agents"]:
+            line = "%-14s %-8s cpu=%5.1f%%" % (agent["name"], agent["status"],
+                                               agent["cpu"])
+            if agent["hint"]:
+                line += " · %s" % agent["hint"]
+            if agent["detail"]:
+                line += "    %s" % agent["detail"]
+            _emit(line)
+        _emit("合计：%s" % snapshot["totals"])
+        return 0
+    except Exception as exc:                    # 冒烟测试要靠退出码判断成败
+        _emit("扫描失败：%r" % exc)
+        return 1
 
 
 if __name__ == "__main__":

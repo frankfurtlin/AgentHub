@@ -1,73 +1,87 @@
 # AgentHub
 
-把本机几个 GUI 版 AI 编程助手的状态收进一个悬浮球。
+**A floating capybara on your desktop that knows which AI coding tool is waiting for you.**
 
-四个工具同时干活的时候，真正难受的不是它们干得不好，而是**你不知道哪一个正卡在那里等你点一下**。
-CodeBuddy 的审批弹窗、Trae 的「等待操作」、Qoder 的权限请求——都躲在各自的窗口里，
-你不切过去就看不见，切过去又会打断手上的事。
+[中文文档](README_CN.md) · [Download latest build](https://github.com/frankfurtlin/AgentHub/releases/latest)
 
-AgentHub 常驻桌面角落，谁在等你就亮谁，点一下直接切到那个窗口。
+---
+
+## The problem
+
+You run four GUI-based AI coding assistants at once. They don't work badly — the problem
+is you **can't tell which one is currently stuck waiting for you to click something**.
+
+CodeBuddy's permission dialog, Trae's "waiting for input", Qoder's authorization request —
+each one lives inside its own window. You don't see them unless you switch over, and
+switching over breaks whatever you were doing.
+
+AgentHub sits in a corner of your desktop and tells you who needs you. Click the card,
+jump straight to that window.
 
 ```
-                ┌──────────────────────────────┐
-   悬浮球        │  AgentHub          3/7 运行中  │  ← 点球展开
-   （贴边）      │ ──────────────────────────── │
-    ●●●●●●●      │  [W] WorkBuddy   有新结果  › │  ← 一个点一个工具
-                │  [D] DeepSeek   空闲中·托盘 › │     颜色随状态变
-                │  [C] CodeBuddy     输出中  › │
-                │  [T] Trae CN       未启动  › │  ← 点卡片切窗口
-                │  [Q] Qoder CN      未启动  › │
-                │ ──────────────────────────── │
-                │  有 1 个工具出了新结果         │
+                 ┌──────────────────────────────┐
+   floating      │  AgentHub          3/7 running│  ← click ball to open
+   ball          │ ────────────────────────────  │
+   (snaps        │  [W] WorkBuddy   needs you  › │  ← click card to jump
+    to edge)     │  [D] DeepSeek    idle · tray › │
+    ●●●●●●●      │  [C] CodeBuddy   streaming  › │      one dot per tool,
+                │  [T] Trae CN        not run  › │      colour = state
+                │  [Q] Qoder CN       not run  › │
+                │ ────────────────────────────  │
+                │  1 tool needs you             │
                 └──────────────────────────────┘
 ```
 
-只列**这台机器上装了**的工具，高度也跟着内容自动伸缩。
+---
 
-## 为什么值得用
+## Why it works
 
-**两条独立的判断通道。** 光靠系统通知会漏——实测 CodeBuddy 和 Qoder 在本机
-通知库里躺着 **0 条**记录（它们注册了处理器，但只在窗口不聚焦时才发通知，
-而审批弹窗恰恰只在你看着窗口时出现，逻辑上死锁）。所以除了读通知，
-还额外用 UI Automation **直接把界面上的审批条读出来**。任一条说「在等你」就算数。
+### Two independent detection channels
 
-**只在必要时出声。** 空闲时不管它；「从不在等 → 在等」的这个边沿才响一声并把面板推出来。
-不会因为你切了个窗口就轰炸你。
+Relying on system notifications alone **does not work**. On this machine, CodeBuddy and
+Qoder had exactly **0 records** in the notification database: they register a handler
+but only send notifications when their window is *unfocused* — while the approval
+dialog only appears when you're *looking at* the window. Logically deadlocked.
 
-**内存里没有它自己的存在感。** 不驻留服务、不写注册表、不装驱动。配置就是一个 JSON 文件。
+So AgentHub also reads the target UI **directly** via UI Automation, scanning for
+approval bars sitting on screen.
 
-## 环境要求
+| Channel | How | Reality check |
+|---|---|---|
+| System notifications | Reads the notification centre's SQLite store | CodeBuddy / Qoder: 0 records. Dead end on its own |
+| UI probe | UI Automation reads whether an approval bar is on screen | Covers the two above; ~80 ms per scan, so it runs on its own 2.5 s thread instead of riding the main loop |
 
-| | |
-|---|---|
-| 系统 | Windows 10/11（macOS 后端预留，见下文） |
-| Python | 3.10+ |
-| 运行时 | Microsoft Edge WebView2 Runtime —— Win11 自带；Win10 一般随 Edge 装好了 |
+Either one saying "waiting" counts. Union, not intersection.
 
-WebView2 Runtime 的好处是**不用跟着安装包发**：它是系统的，界面渲染交给它，
-所以这个项目本身很小（几个 Python 文件 + 一份 HTML/CSS，没有 Electron 那样的上百兆运行时）。
+### It only speaks up when it should
 
-## 当前进度
+Alerts fire on the **edge** — the moment a tool transitions from "not waiting" → "waiting" —
+and once per transition. Not every scan cycle. Switching windows will not get you spammed.
 
-| | |
-|---|---|
-| 悬浮球 + 状态面板 | ✅ 可用（自绘水豚、亮/暗双主题、拖动、贴边记忆） |
-| 状态判断 | ✅ 两条通道：系统通知 + 界面探针（UIA） |
-| 只展示已装的工具 | ✅ 四路检测（注册表 / 快捷方式 / MSIX / exe），5 分钟缓存 |
-| 面板高度 | ✅ 跟着卡片数量自适应（220–900，超出才滚） |
-| 点卡片切窗口 | ✅ 支持从最小化 / 托盘唤起 |
-| 提示音 + 告警边沿 | ✅ 只在「从不在等 → 在等」时响一次 |
-| 开机自启 | ✅ `python tools/install_startup.py on` |
-| 底层自检 / 诊断 | ✅ `tools/selftest.py`、`tools/probe_uia.py` |
-| Windows 后端 | ✅ 完整 |
-| macOS 后端 | 🚧 接口已切好，`host/macos/` 待实现 |
-| 打包分发 | ⬜ 未开始（PyInstaller 方案已想好，见 roadmap） |
+### It stays out of the way
 
-近期做过的事和下一步想做的，分别记在
-[`docs/development.md`](docs/development.md)（开发过程与决策）和
-[`docs/roadmap.md`](docs/roadmap.md)（优化点与拓展想法）里。
+No background service, no registry entries, no drivers. Config is a single JSON file.
+The window is removed from the taskbar (it's a tool window); the entry point lives in
+the system tray.
 
-## 上手
+---
+
+## Quick start
+
+### Option A — download a build (no Python needed)
+
+Grab the zip for your platform from
+[the latest release](https://github.com/frankfurtlin/AgentHub/releases/latest), unzip,
+run it.
+
+> **Windows** needs the WebView2 Runtime. Windows 11 ships with it; on Windows 10 it
+> normally came along with Edge. It's a system component, so it isn't bundled.
+>
+> **macOS**: the build is unsigned, so the first launch needs a right-click → Open
+> (Gatekeeper). Also note the macOS backend is still a stub — see
+> [Platform status](#platform-status).
+
+### Option B — run from source
 
 ```bash
 git clone https://github.com/frankfurtlin/AgentHub.git
@@ -76,9 +90,10 @@ cd AgentHub
 python -m venv .venv
 .venv\Scripts\activate            # macOS: source .venv/bin/activate
 pip install -e .
+python -m agenthub
 ```
 
-不想开界面、只想看看它读到什么：
+Want to see what it reads without opening any window?
 
 ```bash
 python -m agenthub --once
@@ -97,176 +112,202 @@ Codex          未启动      cpu=  0.0%
 合计：{'running': 3, 'waiting': 0, 'unread': 1}
 ```
 
-正常启动：
+---
 
-```bash
-python -m agenthub
+## Supported tools
+
+Only tools **actually installed on this machine** are shown. Install three of the
+seven, and the panel shows three cards — not a row of permanently greyed-out entries.
+
+| Tool | How state is decided | How "installed" is detected |
+|---|---|---|
+| CodeBuddy CN | UI probe | Registry uninstall entry / Start Menu shortcut |
+| Trae CN | Notifications + CPU | Same |
+| Qoder CN | UI probe | Same |
+| WorkBuddy | Notifications | Same |
+| Claude | Notifications | Store (MSIX) build — only visible via `AppModel\Repository\Packages` |
+| DeepSeek Harness | Notifications | Registry + tray presence |
+| Codex | Notifications | CLI, no installer — probe for `codex.exe` |
+
+Detection takes the **union of four sources**: registry uninstall keys
+(`HKCU` / `HKLM`, plus the WOW6432Node view), Start Menu `.lnk` names, MSIX package
+names, and a few executable probes. A tool that is **currently running always counts as
+installed** — green builds and CLI tools leave no installation trace at all.
+Results are cached for 5 minutes, so installing something new doesn't require a restart.
+
+### Adding a tool
+
+Add one entry to `AGENTS` in [`agenthub/models.py`](agenthub/models.py): process name
+for matching, brand colours for the icon backing, `ui_probe=True` if it shows approval
+bars, and `install_hints` (lowercase fragments that appear in its installer name or
+shortcut).
+
+---
+
+## Usage
+
+| Action | Result |
+|---|---|
+| Click the ball | Toggle the panel |
+| Hold and drag the ball | Move it (needs >4 px to count as a drag, so clicks don't misfire) |
+| Click a card | Bring that tool's window to the front (works from minimized / tray) |
+| `Esc` or the × | Collapse the panel |
+| Tray icon · left click | Toggle the panel |
+| Tray icon · right click | Show/hide panel, quit |
+
+The panel snaps next to whichever edge the ball is closest to, and its **height follows
+its content** (clamped to 220–900 px, plus a screen-height guard). Position is remembered
+across restarts.
+
+### States
+
+| State | Level | Meaning |
+|---|---|---|
+| 待审批 / needs you | 2 | Something is sitting there waiting for you to confirm |
+| 有新结果 / finished | 1 | A task finished, results are waiting |
+| 输出中 / streaming | 0 | Running and burning CPU |
+| 空闲中 / idle | 0 | Running, not busy |
+| 未启动 / not running | 0 | Process not found |
+
+Secondary hints append to the state: `· minimized`, `· tray`.
+
+---
+
+## How it's built
+
+```
+models.py      data model + text heuristics (no syscalls, shared across platforms)
+runtime.py     state hub: poll → merge both channels → detect alert edges → snapshot
+app.py         pywebview shell: two frameless transparent windows + JS bridge
+webview_env.py environment setup before WebView starts (one step is mandatory, see docs)
+tray.py        system tray icon
+host/base.py   platform abstraction (Backend / UiProbeSession / WindowInfo)
+host/windows/  Win32 backend: winapi (ctypes), uia (probe), icons, notify, installed
+web/           plain HTML/CSS/JS, no build step
 ```
 
-球的交互：**轻点展开面板，按住拖动挪位置**（位移超过 4px 才算拖，不会误触）。
-面板里点卡片切到对应窗口，`Esc` 或右上角收起。
+Three layering rules:
 
-## 配置
+1. **Everything platform-specific stays inside `host/`.** `Backend` is an abstract base
+   class and the layers above only know that interface. Windows implements it; a macOS
+   backend just fills in the same class and nothing above changes.
+2. **`models.py` contains no system calls.** Notification classification (`classify()`)
+   and "is it waiting" (`AgentState.waiting`) are pure functions — testable, reusable.
+3. **State is computed in Python; the frontend only renders.** The frontend receives a
+   snapshot and makes no decisions, so swapping the UI later doesn't mean rewriting logic.
 
-配置文件在 `%APPDATA%\AgentHub\config.json`（macOS 是 `~/Library/Application Support/AgentHub/config.json`），
-首次运行自动生成。仓库里 [`config.example.json`](config.example.json) 是一份带注释的模板。
+### What's under the hood
+
+- **UI**: pywebview over the system WebView2 Runtime — no bundled browser, no Electron.
+- **Windows internals**: pure `ctypes`. `EnumWindows`, `SetWindowLongPtr` (`GWLP_WNDPROC`
+  subclassing for frame-accurate drag following), DWM glass for real transparency,
+  `Shell_NotifyIcon` for the tray.
+- **UIA probe**: runs on its own thread because COM objects are thread-affine.
+
+---
+
+## Configuration
+
+Stored at `%APPDATA%\AgentHub\config.json`
+(`~/Library/Application Support/AgentHub/config.json` on macOS), created on first run.
+It is **not** tracked by git — paths and coordinates are machine-specific.
+See [`config.example.json`](config.example.json) for a template.
 
 ```jsonc
 {
-  "exePaths": {},        // 手动指定某个工具的可执行文件；留空则从运行中的进程里找
-  "ballPos": null,       // 悬浮球位置 [x, y]；null = 贴屏幕右下角
-  "refreshMs": 1500,     // 主循环扫描间隔
-  "probeIntervalS": 2.5, // 界面探针间隔（一次约 80ms，没必要跟着主循环跑）
-  "theme": "auto",       // auto 跟随系统 / light / dark
-  "sound": true,         // 需要你出手时响一声
+  "exePaths": {},        // pin a tool's executable; empty = find it from running processes
+  "ballPos": null,       // [x, y]; null = snap to bottom-right
+  "refreshMs": 1500,     // main scan interval
+  "probeIntervalS": 2.5, // UI probe interval (~80 ms each, no need to match the loop)
+  "theme": "auto",       // auto follows the system / light / dark
+  "sound": true,         // chime when someone needs you
   "onTop": true,
-  "webviewArgs": []      // 追加给 WebView2 的启动参数，一般不用动
+  "webviewArgs": []      // extra WebView2 flags, usually left alone
 }
 ```
 
-## 支持的工具
+---
 
-| 工具 | 判断方式 | 怎么认出来它装了 |
-|---|---|---|
-| CodeBuddy CN | 界面探针 | 注册表卸载项 / 开始菜单快捷方式 |
-| Trae CN | 通知 + CPU | 同上 |
-| Qoder CN | 界面探针 | 同上 |
-| WorkBuddy | 通知 | 同上 |
-| Claude | 通知 | 商店版（MSIX）走 `AppModel\Repository\Packages`，装的是哪一版都能认出来 |
-| DeepSeek Harness | 通知 | 注册表 + 托盘 |
-| Codex | 通知 | CLI，没有安装程序，只能探测 `codex.exe` 路径 |
-
-**只展示这台机器上真的装了的。** 七家里装三家，面板就只出现三张卡，球上也只有三个点。
-判断是四路取并集（注册表卸载项、开始菜单 `.lnk`、MSIX 包名、exe 探路），
-见 [`agenthub/host/windows/installed.py`](agenthub/host/windows/installed.py)。
-正在运行的进程一律算「装了」——哪怕没留下任何安装痕迹（绿色版、CLI）。
-检测结果缓存 5 分钟，中途装了新工具不用重启。
-
-要加一个工具，只需在 [`agenthub/models.py`](agenthub/models.py) 的 `AGENTS` 里加一条：
-进程名用来找它，品牌色用来画图标底衬，`ui_probe=True` 表示额外用界面探针读审批状态，
-`install_hints` 给小写关键词（能出现在安装名 / 快捷方式名里的片段）用于装机检测。
-
-## 结构
-
-```
-agenthub/
-  models.py       数据模型 + 文案判据（无系统调用，两端共用）
-  runtime.py      状态中枢：定时扫描、合并两条通道、算告警边沿
-  app.py          pywebview 外壳：两个无边框透明窗口 + 暴露给前端的桥
-  webview_env.py  启动 WebView 前的环境准备（有一处不是可选项，见 docs）
-  config.py       配置读写
-    host/
-    base.py            平台抽象层（Backend / UiProbeSession / WindowInfo）
-    windows/           Win32 实现：winapi（纯 ctypes）、uia（UI Automation 探针）、
-                       icons（从 exe 抠图标）、notify（读通知库）、installed（装机检测）
-    macos/             macOS 实现（待写）
-web/
-  index.html      两个视图的模板（悬浮球 / 状态面板）
-  app.js          渲染 + 交互 + 与 Python 通信
-  tokens.css      设计 token（颜色、间距、圆角、阴影）
-  style.css       组件样式
-tools/
-  selftest.py         底层能力自检（不看界面，先分层定位问题）
-  probe_uia.py        界面探针诊断：当场看各家工具界面里读到了什么
-  install_startup.py  开机自启开关（写 HKCU 的 Run 键）
-```
-
-界面是**原生 HTML/CSS/JS**，没有构建步骤、没有 `node_modules`。
-两个窗口共用同一份 `index.html`，靠 URL 上的 `#ball` / `#panel` 区分渲染哪一套。
-
-## 关于形象
-
-悬浮球上那只水豚是**自己画的 SVG**（`web/index.html` 里的 `tpl-ball`），不是任何现成的 IP。
-
-特意写一段说明，是因为这件事总会被问到：「能不能用水豚噜噜那个形象？」
-——不能。那类热门形象是有版权方的商业 IP（噜噜的版权在铁罐文化，正在做盲盒、
-联名等付费授权），把它的形象画进一个 MIT 开源项目里，风险是明确的。
-但**「水豚」这个物种本身没有版权**，所以照着物种特征（圆脸、小圆耳、宽鼻吻、
-黑豆眼）独立画一只，就既干净又不影响可爱程度——成品就是球上这只。
-
-想改的话：
-
-- **配色**：全在 `web/tokens.css` 的 `--capy-*` 里，亮暗两套各一份。
-- **造型**：改 `web/index.html` 里 `tpl-ball` 和 `tpl-panel` 的两个 `<svg>`。
-- **表情**：球会跟着状态走——平静时是默认，有新结果眼睛睁大 6%，有待确认再放大到 17%
-  （`web/style.css` 里 `.ball[data-level="1"] / [data-level="2"]` 那两条 `.capy__eye`）。
-  另外它每 6.4 秒眨一次眼。
-
-⚠️ 画的时候有个必踩的坑：毛色渐变那三个 `<stop>` 的颜色**只能由 CSS class 给**，
-不能写成 `stop-color="var(--capy-hi)"`。SVG 的 `<stop>` 不解析 presentation attribute
-里的 CSS 变量，渐变会整个失效——而失效的表现是引用它的那个圆**直接不画**，
-脸凭空消失，控制台连一个错都不报。（反过来说，`<circle fill="var(--x)">` 这种是好的，
-只有 `<stop>` 不行，所以特别容易被绕进去。）
-
-## 一些踩过的坑
-
-装 Python 就能跑的代价是，平台细节得自己趟。几个不记下来一定会重踩的：
-
-- **透明窗口要自己补一刀**：pywebview 建透明窗口时只把 WebView2 的背景设成透明，
-  **窗体自己的底色没动**，还是 WinForms 默认的 `#F0F0F0`（不透明浅灰）——于是悬浮球外面
-  一直套着一个浅灰方框。修法是把窗体刷黑 + `DwmExtendFrameIntoClientArea`（DWM 玻璃），
-  见 `webview_env.patch_transparency()`。
-  ⚠️ 别用 `TransparencyKey`：它也能让四角透明，但会把窗口变成 layered，而 layered 窗口的
-  色键区**放行鼠标消息**——实测页面里一次 `mousedown` 都收不到，球直接点不动。
-  同理，DWM 玻璃区里的纯黑像素会被键掉，所以界面不许用 `#000000`。
-
-- **WebView2 的 GPU 沙箱**：部分机器上 GPU 子进程起不来，Chromium 连试 9 次后整体放弃，
-  窗口一片白、JS 一行不执行，而 Python 侧只会报一句「Main window failed to start」。
-  修法是 `--disable-gpu-sandbox`。完整症状、误判过的方案、为什么 `--disable-gpu` 反而没用，
-  都写在 [`docs/webview2-notes.md`](docs/webview2-notes.md)。
-- **窗口尺寸不能只信 `create_window`**：pywebview 的 `min_size` 默认 `(200, 100)`，
-  会把 76×76 的球撑成 200×100；初始 `Size` 还会被 WinForms 的 `AutoScaleMode.Dpi` 揉一遍，
-  面板会莫名少十几像素、页脚被裁掉。得在窗口起来之后用 `resize()`（走 `SetWindowPos`）校正。
-- **审批条不是按钮**：CodeBuddy 的审批选项是 `<div class="approval-menu-item">`，
-  按 Button 类型扫是扫不到的，得另开一条「按标题文字精确匹配」的通道。
-- **前端资源会被缓存**：pywebview 给本地文件用的内建 HTTP 服务**没有发
-  `Cache-Control`**（它设了，但被 `bottle.static_file` 返回的响应对象顶掉了，只剩
-  `Last-Modified` 和 `ETag`），WebView2 于是走启发式缓存，新鲜期大约是文件年龄的
-  10%。所以 `web/index.html` 里的资源路径带了 `?v=`（一个手动递增的缓存键，跟包版本
-  无关，改前端时顺手加一下就行）。
-
-  但**光有 `?v=` 不够**：它只让 CSS/JS 换新，`index.html` 自己也会被缓存，于是改了前端、
-  重启了进程，界面上还是旧样式（踩过一次，排查了半天以为样式没生效）。所以
-  `webview_env._clear_cache_on_version_change()` 在启动时比对 `agenthub.__version__`，
-  版本一变就删掉 WebView2 的 `Cache` / `Code Cache`。**改前端记得同时升 `__version__`**，
-  否则本地看到的还是旧界面。
-- **桥是分两步注入的**：pywebview 先把 `window.pywebview = {api: {}}` 建出来并派发
-  `pywebviewready`，隔一会儿才把真正的方法挂上去。中间那一小段里 `window.pywebview.api`
-  是个真值、却不是能用的桥，拿它调方法会抛 `TypeError`。如果启动逻辑只判断「桥在不在」、
-  报错又被 `catch` 吞掉，就会永远停在初始化不完整的半路——我们踩到的表现是配置里的
-  主题偏好已经读到了，界面却始终不跟随。所以判存在之外还要判方法是不是 `function`，
-  并且失败必须能重试（`web/app.js` 的 `boot()` 就是这么写的）。
-- **UIA 得从渲染面取元素**：Electron 只有一个 `Chrome_RenderWidgetHostHWND`，
-  从顶层窗口拿到的只有 3 个标题栏按钮。
-- **DPI 感知得自己设**：pywebview 不设，但它的 `get_screens()` 注释里写着
-  「already DPI-aware scaled due to SetProcessDPIAware」——那是**它的假设**，
-  不是它做过的事。不设的话，进程在窗口刚建好那会儿还不感知，
-  `webview.screens` 报的是被 Windows 虚拟化过的尺寸（2560×1440 的屏报
-  2048×1152）；等 WinForms 稍后把感知补上，坐标语义又变了，这时 `move()` 会
-  再乘一次缩放，不折算球会直接飞出屏幕。见 `agenthub/webview_env.py` 的
-  `enable_dpi_awareness()` 和 `app.py` 的 `_logical_screen()`。
-
-## macOS
-
-后端接口（`host/base.py` 的 `Backend`）已经按平台无关的方式切好了，Windows 之外的一切
-都走它。要补的是 `host/macos/`：
-
-- 进程与窗口：`NSRunningApplication` / `CGWindowListCopyWindowInfo`
-- 界面探针：`AXUIElement`（权限同「辅助功能」）
-- 通知：`UNUserNotificationCenter` 的数据库（`~/Library/Application Support/.../db2`）
-- 图标：`NSWorkspace.iconForFile`
-
-界面那层不用改——`web/` 是纯浏览器代码，pywebview 在 macOS 上走 WKWebView。
-`theme: auto` 也跟着系统走。
-
-## 文档
+## Platform status
 
 | | |
 |---|---|
-| [`docs/development.md`](docs/development.md) | 开发过程：三代界面方案的取舍、架构决策、踩坑清单 |
-| [`docs/roadmap.md`](docs/roadmap.md) | 下一步：已知问题、优化点、功能拓展想法 |
-| [`docs/webview2-notes.md`](docs/webview2-notes.md) | WebView2 / pywebview 的专项排查笔记 |
+| Windows | ✅ Full — processes, windows, UIA probe, notifications, icons, tray, autostart |
+| macOS | 🚧 Interface is in place; `agenthub/host/macos/` is a stub with a TODO list at the top of the file |
 
-## 许可
+The Windows backend is complete. The macOS one needs five pieces filled in
+(windows / AX probe / notification DB / icons / misc) — the todo list in
+`agenthub/host/macos/__init__.py` spells out each with the APIs to use.
+
+---
+
+## Troubleshooting
+
+**Panel and ball won't move smoothly, or icons are blank, or clicking does nothing.**
+Run the low-level self-check first — it separates the detection layer from the UI layer:
+
+```bash
+python tools/selftest.py        # 11 checks; all PASS = problem is in the WebView layer
+python tools/probe_uia.py       # what the UI probe actually reads from each tool
+```
+
+If the self-check passes but the UI is wrong, see
+[`docs/webview2-notes.md`](docs/webview2-notes.md).
+
+**Autostart:** `python tools/install_startup.py on|off|status`
+
+---
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+python -m pytest tests/ -q        # 22 cases, no GUI needed
+python -m pytest tests/test_x.py  # or run a single file directly
+```
+
+Packaging: `python tools/build.py --clean --zip`
+→ see [`docs/packaging.md`](docs/packaging.md).
+
+Every push to `main` triggers a build for Windows and macOS and republishes the
+`latest` release — see [`.github/workflows/build.yml`](.github/workflows/build.yml).
+
+Contributions: [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+---
+
+## About the capybara
+
+The capybara on the ball is an **original SVG** (`web/index.html`, template `tpl-ball`),
+not an existing character.
+
+Worth spelling out, because it always comes up: **could we use the 水豚噜噜 design?**
+No. Popular capybara characters are commercial IP with rights holders (噜噜 belongs to
+铁罐文化, currently doing blind boxes and paid collaborations). Drawing one into an MIT
+open-source project carries clear risk. But **the species itself isn't copyrightable**, so
+drawing an independent capybara from species traits — round face, small round ears, broad
+muzzle, black bean eyes — is both clean and just as cute. That's this one.
+
+To customise:
+
+- **Colours**: all in `web/tokens.css` under `--capy-*`, one set each for light and dark.
+- **Shapes**: the two `<svg>` blocks (`tpl-ball`, `tpl-panel`) in `web/index.html`.
+- **Expression**: the ball reacts to state — level 1 widens the eyes 6%, level 2 by 17%
+  (`.ball[data-level="1"] / [data-level="2"]` → `.capy__eye`). It also blinks every 6.4 s.
+
+⚠️ **A trap you will hit when restyling**: the three `<stop>` colours in the fur gradient
+**must come from CSS classes**, never `stop-color="var(--capy-hi)"`. SVG `<stop>` elements
+do not resolve CSS variables inside presentation attributes, so the gradient silently
+fails — and "fails" means the circle referencing it **is not drawn at all**, with
+nothing printed to the console. (`<circle fill="var(--x)">` is fine; only `<stop>` breaks,
+which is exactly what makes it confusing.)
+
+⚠️ **Never use `#000000` in the UI**: the transparency is DWM glass, whose key colour is
+black. Pure black pixels are keyed out and become transparent. Semi-transparent shadows
+are fine — they never composite to pure black.
+
+---
+
+## License
 
 MIT

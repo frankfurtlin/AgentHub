@@ -1,0 +1,120 @@
+name: Build
+
+# 每次往 main 推代码就重新打一次包，发布到固定的 latest release。
+#
+# 「只留最新的一个包」是怎么做到的：release 的 tag 恒为 `latest`，
+# 每次发布前先把旧的 release（连带 tag）删掉，再建一个同名的。
+# 于是 release 页面永远只有一份产物，URL 也是固定的：
+#     https://github.com/<owner>/<repo>/releases/latest
+#
+# 想保留历史版本的话，把下面 release job 里的 tag 换成
+# `v${{ github.run_number }}` 或 `${{ github.sha }}` 即可。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: AgentHub-windows-x64
+          - os: macos-latest
+            name: AgentHub-macos-arm64
+          - os: macos-13
+            name: AgentHub-macos-x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[build,dev]"
+
+      - name: 语法检查
+        run: python -m compileall -q agenthub tools tests
+
+      # 测试是纯逻辑的（假后端，不碰系统 API），三个平台上都应该稳过。
+      # 真挂了就该拦住构建——别让一个有问题的包发出去。
+      - name: 跑测试
+        run: python -m pytest tests/ -q
+
+      - name: 打包
+        run: python tools/build.py --clean --zip
+
+      # 打包出来的 exe 是 --windowed（无控制台），--once 的输出看不到，
+      # 所以判断依据是**退出码**：能正常扫完就是 0。日志在下一步打出来。
+      - name: 冒烟测试
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ./dist/AgentHub/AgentHub.exe --once
+          else
+            # macOS 后端还是占位实现（agenthub/host/macos/），真跑会抛
+            # NotImplementedError。这里只验包结构和二进制可执行，不跑扫描。
+            test -x "dist/AgentHub.app/Contents/MacOS/AgentHub"
+            echo "macOS 包结构正常（后端未实现，跳过扫描）"
+          fi
+
+      - name: 打印诊断日志
+        if: always()
+        shell: bash
+        run: |
+          LOG="${APPDATA:-$HOME}/AgentHub/agenthub.log"
+          if [ -f "$LOG" ]; then cat "$LOG"; else echo "（没有生成日志）"; fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: 发布 latest
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 删掉上一次的 latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete latest --yes --cleanup-tag
+          # 极端情况下 gh 的 --cleanup-tag 没生效（tag 被保护规则挡住之类），
+          # 这里再兜一次，否则下一步 create 会因为 tag 已存在而失败。
+          gh api -X DELETE "repos/$GH_REPO/git/refs/tags/latest" || true
+
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create latest \
+            --title "AgentHub 最新构建" \
+            --notes "由 \`$GITHUB_REF\` @ \`${GITHUB_SHA::7}\` 自动构建 $(date -u +'%Y-%m-%d %H:%M UTC')" \
+            --target "$GITHUB_SHA" \
+            dist/*.zip

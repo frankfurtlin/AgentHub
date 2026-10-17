@@ -1,0 +1,67 @@
+name: 状态读错了 / 界面不对
+description: 某个工具的状态显示不对，或者界面出问题了
+labels: ["bug"]
+body:
+  - type: markdown
+    value: |
+      提交之前先跑一下自检，能省掉一轮来回：
+
+      ```bash
+      python tools/selftest.py
+      ```
+
+      11 项全 PASS 的话，问题大概率在 WebView 那一侧，把结果贴上来就行。
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: `python -c "import agenthub; print(agenthub.__version__)"`
+      placeholder: "0.2.10"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: 系统
+      placeholder: "Windows 11 23H2 / macOS 14.5"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: tool
+    attributes:
+      label: 哪个工具
+      options:
+        - CodeBuddy CN
+        - Trae CN
+        - Qoder CN
+        - WorkBuddy
+        - Claude
+        - DeepSeek Harness
+        - Codex
+        - 跟具体工具无关
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望看到什么
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际看到什么
+    validations:
+      required: true
+
+  - type: textarea
+    id: selftest
+    attributes:
+      label: `python tools/selftest.py` 的输出
+      description: 有就贴，没有就留空
+      render: text

@@ -20,6 +20,12 @@ wheels/
 .installed.cfg
 *.egg
 
+# 测试 / lint 的缓存
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
 # ---------- 虚拟环境 ----------
 .venv/
 venv/
