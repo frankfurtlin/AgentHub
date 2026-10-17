@@ -32,6 +32,16 @@ import shutil
 import subprocess
 import sys
 
+# Windows 的 CI runner 上 stdout 默认**不是 UTF-8**（跟随控制台代码页），
+# 而这个脚本的输出和注释都是中文——`print` 会抛 UnicodeEncodeError，
+# 整个构建当场挂掉，报错还看不出跟编码有关。先强制切一次 UTF-8。
+# 本地 Git Bash / macOS 本来就是 UTF-8，这一步等于没做。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = "AgentHub"
 

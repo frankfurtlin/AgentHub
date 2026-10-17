@@ -20,6 +20,13 @@ on:
 permissions:
   contents: write
 
+# 脚本的输出、日志、测试断言里都有中文。Windows runner 的默认编码不是 UTF-8，
+# 不设这个的话 print 中文会抛 UnicodeEncodeError——报错信息跟编码毫无关系，
+# 极难排查（第一次跑就踩了：macOS 全绿，只有 Windows 挂在打包步骤）。
+env:
+  PYTHONIOENCODING: utf-8
+  PYTHONUTF8: "1"
+
 jobs:
   build:
     name: ${{ matrix.name }}
